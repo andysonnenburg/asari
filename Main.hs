@@ -81,6 +81,10 @@ infixr 0 $$$
 ($$$) :: Category f => f b c -> f a b  -> f a c
 ($$$) = (<<<)
 
+forWithKey_ :: Applicative f => Map a b -> (a -> b -> f c) -> f ()
+forWithKey_ xs f =
+  Map.foldlWithKey' (\ m k x -> m *> f k x $> ()) (pure ()) xs
+
 traverseSet :: (Applicative f, Ord b) => (a -> f b) -> Set a -> f (Set b)
 traverseSet f =
   foldl' (\ m x -> Set.insert <$> f x <*> m) (pure Set.empty)
@@ -88,7 +92,7 @@ traverseSet f =
 runVisitT :: (Monoid s, Monad m) => StateT s m a -> m a
 runVisitT = flip evalStateT mempty
 
-visit_ :: (Ord a, MonadState (Set a) m) => a -> m () -> m ()
+visit_ :: (Ord a, MonadState (Set a) m) => a -> m b -> m ()
 visit_ x m = get <&> Set.member x >>= \ case
   True -> pure ()
   False -> m *> modify (Set.insert x)
@@ -131,7 +135,7 @@ unify = curry $ runVisitT $$$ fix $ \ rec (x, y) -> visit_ (x, y) $ do
     merge y' y
   x_trans <- readRef x.trans
   y_trans <- readRef y.trans
-  for_ (Map.assocs y_trans) $ \ (f, y') -> do
+  forWithKey_ y_trans $ \ f y' -> do
     let x' = x_trans!f
     sequence $
       if contra f
