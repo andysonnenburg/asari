@@ -89,21 +89,31 @@ traverseSet :: (Applicative f, Ord b) => (a -> f b) -> Set a -> f (Set b)
 traverseSet f =
   foldl' (\ m x -> Set.insert <$> f x <*> m) (pure Set.empty)
 
-runVisitT :: (Monoid s, Monad m) => StateT s m a -> m a
-runVisitT = flip evalStateT mempty
+runMemoT :: (Monoid s, Monad m) => StateT s m a -> m a
+runMemoT = flip evalStateT mempty
 
-visit_ :: (Ord a, MonadState (Set a) m) => a -> m b -> m ()
-visit_ x m = get <&> Set.member x >>= \ case
+memo_ :: (Ord a, MonadState (Set a) m) => (a -> m b) -> a -> m ()
+memo_ f x = get <&> Set.member x >>= \ case
   True -> pure ()
-  False -> m *> modify (Set.insert x)
+  False -> f x *> modify (Set.insert x)
 
-visit :: (Ord a, MonadState (Map a a) m) => a -> m a -> m a
-visit x m = get <&> Map.lookup x >>= \ case
+visit_ :: ( Ord a
+          , Monad m
+          ) => ((a -> StateT (Set a) m ()) -> a -> StateT (Set a) m b) -> a -> m ()
+visit_ f = runMemoT $$$ fix $ memo_ . f
+
+memo :: (Ord a, MonadState (Map a b) m) => (a -> m b) -> a -> m b
+memo f x = get <&> Map.lookup x >>= \ case
   Just x' -> pure x'
-  Nothing -> m >>= \ x' -> modify (Map.insert x x') $> x'
+  Nothing -> f x >>= \ x' -> modify (Map.insert x x') $> x'
+
+visit :: ( Ord a
+         , Monad m
+         ) => ((a -> StateT (Map a b) m b) -> a -> StateT (Map a b) m b) -> a -> m b
+visit f = runMemoT $$$ fix $  memo . f
 
 writeLevels :: MonadRef r m => Level -> Type r -> m ()
-writeLevels x = runVisitT $$$ fix $ \ rec y -> visit_ y $ do
+writeLevels x = visit_ $ \ rec y -> do
   y_level <- readRef y.level
   when (y_level > x) $ do
     writeRef y.level x
@@ -122,7 +132,7 @@ merge x y = do
   writeRef x.flow =<< Set.union y_flow <$> readRef x.flow
 
 unify :: (MonadError () m, MonadRef r m) => Type r -> Type r -> m ()
-unify = curry $ runVisitT $$$ fix $ \ rec (x, y) -> visit_ (x, y) $ do
+unify = curry $ visit_ $ \ rec (x, y) -> do
   x_cons <- readRef x.cons
   y_cons <- readRef y.cons
   when (not (y_cons `isSubsetOf` x_cons)) $
@@ -187,7 +197,7 @@ inst :: ( MonadReader Level m
         , MonadRef r m
         , MonadSupply Label m
         ) => Type r -> m (Type r)
-inst = runVisitT $$$ fix $ \ rec x -> visit x $ do
+inst = visit $ \ rec x -> do
   x_level <- readRef x.level
   if x_level == genLevel
     then join $
@@ -201,7 +211,7 @@ gen :: ( MonadReader Level m
        , MonadRef r m
        , MonadSupply Label m
        ) => Type r -> m ()
-gen = runVisitT $$$ fix $ \ rec x -> visit_ x $ do
+gen = visit_ $ \ rec x -> do
   x_level <- readRef x.level
   y <- ask
   when (x_level > y) $ do
