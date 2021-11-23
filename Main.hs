@@ -1,15 +1,19 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
 module Main (main) where
 
+import Control.Category (Category, (<<<))
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.Reader.Class
+import Control.Monad.State.Strict
 
 import Data.Foldable
+import Data.Functor
 import Data.Map (Map, (!))
 import qualified Data.Map as Map
 import Data.Ord
@@ -22,8 +26,16 @@ class Monad m => MonadRef r m | m -> r where
   readRef :: r a -> m a
   writeRef :: r a -> a -> m ()
 
+instance MonadRef r m => MonadRef r (StateT s m) where
+  newRef = lift . newRef
+  readRef = lift . readRef
+  writeRef x = lift . writeRef x
+
 class Monad m => MonadSupply s m | m -> s where
   supply :: m s
+
+instance MonadSupply s m => MonadSupply s (StateT s' m) where
+  supply = lift supply
 
 data Cons
   = Ref
@@ -64,28 +76,49 @@ instance Eq (Type r) where
 instance Ord (Type r) where
   compare = comparing label
 
-writeLevels :: MonadRef r m => Type r -> Level -> m ()
-writeLevels x y = do
-  x_level <- readRef x.level
-  when (x_level > y) $ do
-    writeRef x.level y
-    traverse_ (traverse_ (flip writeLevels y)) =<< readRef x.trans
-    traverse_ (flip writeLevels y) =<< readRef x.flow
+infixr 0 $$$
+
+($$$) :: Category f => f b c -> f a b  -> f a c
+($$$) = (<<<)
+
+traverseSet :: (Applicative f, Ord b) => (a -> f b) -> Set a -> f (Set b)
+traverseSet f =
+  foldl' (\ m x -> Set.insert <$> f x <*> m) (pure Set.empty)
+
+runVisitT :: (Monoid s, Monad m) => StateT s m a -> m a
+runVisitT = flip evalStateT mempty
+
+visit_ :: (Ord a, MonadState (Set a) m) => a -> m () -> m ()
+visit_ x m = get <&> Set.member x >>= \ case
+  True -> pure ()
+  False -> m *> modify (Set.insert x)
+
+visit :: (Ord a, MonadState (Map a a) m) => a -> m a -> m a
+visit x m = get <&> Map.lookup x >>= \ case
+  Just x' -> pure x'
+  Nothing -> m >>= \ x' -> modify (Map.insert x x') $> x'
+
+writeLevels :: MonadRef r m => Level -> Type r -> m ()
+writeLevels x = runVisitT $$$ fix $ \ rec y -> visit_ y $ do
+  y_level <- readRef y.level
+  when (y_level > x) $ do
+    writeRef y.level x
+    traverse_ (traverse_ rec) =<< readRef y.trans
+    traverse_ rec =<< readRef y.flow
 
 merge :: MonadRef r m => Type r -> Type r -> m ()
 merge x y = do
   writeRef x.cons =<< Set.union <$> readRef x.cons <*> readRef y.cons
   x_level <- readRef x.level
-  y_level <- readRef y.level
-  case compare x_level y_level of
-    LT -> writeLevels y x_level
-    EQ -> pure ()
-    GT -> writeLevels x y_level
-  writeRef x.trans =<< Map.unionWith (++) <$> readRef x.trans <*> readRef y.trans
-  writeRef x.flow =<< Set.union <$> readRef x.flow <*> readRef y.flow
+  y_trans <- readRef y.trans
+  traverse (traverse (writeLevels x_level)) y_trans
+  writeRef x.trans =<< Map.unionWith (++) y_trans <$> readRef x.trans
+  y_flow <- readRef y.flow
+  traverseSet (writeLevels x_level) y_flow
+  writeRef x.flow =<< Set.union y_flow <$> readRef x.flow
 
 unify :: (MonadError () m, MonadRef r m) => Type r -> Type r -> m ()
-unify x y = do
+unify = curry $ runVisitT $$$ fix $ \ rec (x, y) -> visit_ (x, y) $ do
   x_cons <- readRef x.cons
   y_cons <- readRef y.cons
   when (not (y_cons `isSubsetOf` x_cons)) $
@@ -102,8 +135,8 @@ unify x y = do
     let x' = x_trans!f
     sequence $
       if contra f
-      then unify <$> y' <*> x'
-      else unify <$> x' <*> y'
+      then curry rec <$> y' <*> x'
+      else curry rec <$> x' <*> y'
 
 type Name = Word
 
@@ -150,25 +183,27 @@ inst :: ( MonadReader Level m
         , MonadRef r m
         , MonadSupply Label m
         ) => Type r -> m (Type r)
-inst x = do
+inst = runVisitT $$$ fix $ \ rec x -> visit x $ do
   x_level <- readRef x.level
-  if x_level == genLevel then do
-    x_cons <- readRef x.cons
-    join $
-      newType <$>
-      readRef x.cons <*>
-      (traverse (traverse inst) =<< readRef x.trans) <*>
-      (mapM inst =<< readRef x.flow)
+  if x_level == genLevel
+    then join $
+         newType <$>
+         readRef x.cons <*>
+         (traverse (traverse rec) =<< readRef x.trans) <*>
+         (traverseSet rec =<< readRef x.flow)
     else pure x
-  where
-    mapM f =
-      foldl (\ m x -> Set.insert <$> f x <*> m) (pure Set.empty)
 
 gen :: ( MonadReader Level m
        , MonadRef r m
        , MonadSupply Label m
-       ) => Type r -> m (Type r)
-gen = undefined
+       ) => Type r -> m ()
+gen = runVisitT $$$ fix $ \ rec x -> visit_ x $ do
+  x_level <- readRef x.level
+  y <- ask
+  when (x_level > y) $ do
+    writeRef x.level genLevel
+    traverse_ (traverse_ rec) =<< readRef x.trans
+    traverse_ rec =<< readRef x.flow
 
 infer :: ( MonadError () m
          , MonadReader Level m
@@ -197,7 +232,8 @@ infer env = \ case
     unify t_e1 =<< newTypeFn t_e2 t_a
     pure t_a
   Let x e1 e2 -> do
-    t_e1 <- gen =<< local succ (infer env e1)
+    t_e1 <- local succ (infer env e1)
+    gen t_e1
     let env = Map.insert x (True, t_e1) env
     infer env e2
 
