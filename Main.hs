@@ -1,32 +1,50 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
 module Main (main) where
 
+import Control.Arrow ((***))
 import Control.Category (Category, (<<<))
 import Control.Monad
 import Control.Monad.Error.Class
 import Control.Monad.Reader.Class
+import Control.Monad.RWS.Strict
+import Control.Monad.ST
 import Control.Monad.State.Strict
-
 import Data.Foldable
 import Data.Functor
-import Data.Map (Map, (!))
-import qualified Data.Map as Map
+import Data.IORef
+import Data.Map.Lazy (Map, (!))
+import Data.Map.Lazy qualified as Map
 import Data.Ord
+import Data.STRef
 import Data.Set (Set, isSubsetOf)
-import qualified Data.Set as Set
+import Data.Set qualified as Set
 import Data.Word
+import GHC.Records (getField)
 
 class Monad m => MonadRef r m | m -> r where
   newRef :: a -> m (r a)
   readRef :: r a -> m a
   writeRef :: r a -> a -> m ()
 
-instance MonadRef r m => MonadRef r (StateT s m) where
+instance MonadRef IORef IO where
+  newRef = newIORef
+  readRef = readIORef
+  writeRef = writeIORef
+
+instance MonadRef (STRef s) (ST s) where
+  newRef = newSTRef
+  readRef = readSTRef
+  writeRef = writeSTRef
+
+instance (Monoid w, MonadRef r m) => MonadRef r (RWST r' w s m) where
   newRef = lift . newRef
   readRef = lift . readRef
   writeRef x = lift . writeRef x
@@ -34,8 +52,52 @@ instance MonadRef r m => MonadRef r (StateT s m) where
 class Monad m => MonadSupply s m | m -> s where
   supply :: m s
 
-instance MonadSupply s m => MonadSupply s (StateT s' m) where
+newtype SupplyT s m a = SupplyT (StateT s m a) deriving (Functor, Applicative, Monad)
+
+instance (Num s, Monad m) => MonadSupply s (SupplyT s m) where
+  supply = SupplyT $ state $ \ x -> (x, x + 1)
+
+instance (Monoid w, MonadSupply s m) => MonadSupply s (RWST r w s' m) where
   supply = lift supply
+
+traverseSet :: (Applicative f, Ord b) => (a -> f b) -> Set a -> f (Set b)
+traverseSet f =
+  foldl' (\ m x -> Set.insert <$> f x <*> m) (pure Set.empty)
+
+forWithKey_ :: Applicative f => Map a b -> (a -> b -> f c) -> f ()
+forWithKey_ xs f =
+  Map.foldlWithKey' (\ m k x -> m *> f k x $> ()) (pure ()) xs
+
+infixr 0 $$$
+
+($$$) :: Category f => f b c -> f a b  -> f a c
+($$$) = (<<<)
+
+runMemoT :: (Monoid s, Monad m) => StateT s m a -> m a
+runMemoT = flip evalStateT mempty
+
+memo_ :: (Ord a, MonadState (Set a) m) => (a -> m b) -> a -> m ()
+memo_ f x = get <&> Set.member x >>= \ case
+  True -> pure ()
+  False -> modify (Set.insert x) <* f x
+
+visit_ :: ( Ord a
+          , Monad m
+          ) => ((a -> StateT (Set a) m ()) -> a -> StateT (Set a) m b) -> a -> m ()
+visit_ f = runMemoT $$$ fix $ memo_ . f
+
+memo :: (Ord a, MonadFix m, MonadState (Map a b) m) => (a -> m b) -> a -> m b
+memo f x = get <&> Map.lookup x >>= \ case
+  Just x' -> pure x'
+  Nothing -> mdo
+    modify (Map.insert x x')
+    x' <- f x
+    pure x'
+
+visit :: ( Ord a
+         , MonadFix m
+         ) => ((a -> StateT (Map a b) m b) -> a -> StateT (Map a b) m b) -> a -> m b
+visit f = runMemoT $$$ fix $ memo . f
 
 data Cons
   = Ref
@@ -56,71 +118,94 @@ contra = \ case
 
 type Label = Word
 
-type Level = Word
-
-type Trans r = Map Symbol [Type r]
-
-type Flow r = Set (Type r)
-
-data Type r = Type
+data NFA r = NFA
   { label :: Label
-  , level :: r Level
   , cons :: r (Set Cons)
-  , trans :: r (Trans r)
-  , flow :: r (Flow r)
+  , trans :: r (Map Symbol (Set (NFA r)))
+  , epsilonTrans :: r (Set (NFA r))
+  , flow :: r (Set (NFA r))
   }
 
-instance Eq (Type r) where
-  x == y = label x == label y
+instance Eq (NFA r) where
+  x == y = getField @"label" x == getField @"label" y
 
-instance Ord (Type r) where
-  compare = comparing label
+instance Ord (NFA r) where
+  compare = comparing $ getField @"label"
 
-infixr 0 $$$
+data DFA = DFA
+  { label :: Label
+  , cons :: Set Cons
+  , trans :: Map Symbol DFA
+  , flow :: Set DFA
+  }
 
-($$$) :: Category f => f b c -> f a b  -> f a c
-($$$) = (<<<)
+instance Eq DFA where
+  x == y = getField @"label" x == getField @"label" y
 
-forWithKey_ :: Applicative f => Map a b -> (a -> b -> f c) -> f ()
-forWithKey_ xs f =
-  Map.foldlWithKey' (\ m k x -> m *> f k x $> ()) (pure ()) xs
+instance Ord DFA where
+  compare = comparing $ getField @"label"
 
-traverseSet :: (Applicative f, Ord b) => (a -> f b) -> Set a -> f (Set b)
-traverseSet f =
-  foldl' (\ m x -> Set.insert <$> f x <*> m) (pure Set.empty)
+epsilonClosure' :: MonadRef r m => Set (NFA r) -> NFA r -> m (Set (NFA r))
+epsilonClosure' = fix $ \ recur xs x ->
+  if Set.member x xs
+  then pure xs
+  else foldlM recur (Set.insert x xs) =<< readRef x.epsilonTrans
 
-runMemoT :: (Monoid s, Monad m) => StateT s m a -> m a
-runMemoT = flip evalStateT mempty
+epsilonClosure :: MonadRef r m => NFA r -> m (Set (NFA r))
+epsilonClosure = epsilonClosure' mempty
+  
+transClosure :: (MonadFix m, MonadRef r m) => NFA r -> m (Map Symbol (Set (NFA r)))
+transClosure x = traverse (foldlM epsilonClosure' mempty) =<< readRef x.trans
 
-memo_ :: (Ord a, MonadState (Set a) m) => (a -> m b) -> a -> m ()
-memo_ f x = get <&> Set.member x >>= \ case
-  True -> pure ()
-  False -> f x *> modify (Set.insert x)
+foldMapM :: (Foldable f, Monad m, Monoid b) => (a -> m b) -> f a -> m b
+foldMapM f = foldrM (\ x z -> mappend z <$> f x) mempty
 
-visit_ :: ( Ord a
-          , Monad m
-          ) => ((a -> StateT (Set a) m ()) -> a -> StateT (Set a) m b) -> a -> m ()
-visit_ f = runMemoT $$$ fix $ memo_ . f
+foldMapM' :: (Foldable f, Monad m) => b -> (b -> b -> b) -> (a -> m b) -> f a -> m b
+foldMapM' zero plus f = foldrM (\ x z -> plus z <$> f x) zero
 
-memo :: (Ord a, MonadState (Map a b) m) => (a -> m b) -> a -> m b
-memo f x = get <&> Map.lookup x >>= \ case
-  Just x' -> pure x'
-  Nothing -> f x >>= \ x' -> modify (Map.insert x x') $> x'
+filterMap :: Ord b => (a -> Maybe b) -> Set a -> Set b
+filterMap f xs = foldl' (\ z x -> maybe z (\ y -> Set.insert y z) (f x)) mempty xs
 
-visit :: ( Ord a
-         , Monad m
-         ) => ((a -> StateT (Map a b) m b) -> a -> StateT (Map a b) m b) -> a -> m b
-visit f = runMemoT $$$ fix $  memo . f
+filterMapM :: (Monad m, Ord b) => (a -> m (Maybe b)) -> Set a -> m (Set b)
+filterMapM f xs = foldlM (\ z x -> maybe z (\ y -> Set.insert y z) <$> f x) mempty xs
 
-writeLevels :: MonadRef r m => Level -> Type r -> m ()
-writeLevels x = visit_ $ \ rec y -> do
-  y_level <- readRef y.level
-  when (y_level > x) $ do
-    writeRef y.level x
-    traverse_ (traverse_ rec) =<< readRef y.trans
-    traverse_ rec =<< readRef y.flow
+type FreezeT r = RWST (Map (NFA r) DFA) (Map (NFA r) DFA) (Map (Set (NFA r)) DFA)
 
-merge :: MonadRef r m => Type r -> Type r -> m ()
+evalFreezeT :: MonadFix m => FreezeT r m a -> m a
+evalFreezeT m = fmap fst . mfix $ \ (x, env) -> evalRWST m env mempty
+
+toDFA' :: ( MonadFix m
+          , MonadRef r m
+          , MonadSupply Label m
+          ) => Set (NFA r) -> FreezeT r m DFA
+toDFA' = fix $ \ recur xs -> get <&> Map.lookup xs >>= \ case
+  Just xs -> pure xs
+  Nothing -> mfix $ \ y -> do
+    modify $ Map.insert xs y
+    tell $ Map.fromList $ zip (toList xs) (repeat y)
+    DFA <$>
+      supply <*>
+      foldMapM (readRef . (.cons)) xs <*>
+      (traverse recur <=< foldMapM' mempty (Map.unionWith Set.union) transClosure) xs <*>
+      foldMapM (filterMapM (flip fmap ask . Map.lookup) <=< readRef . (.flow)) xs
+
+toDFA :: ( MonadFix m
+         , MonadRef r m
+         , MonadSupply Label m
+         ) => NFA r -> FreezeT r m DFA
+toDFA = toDFA' <=< epsilonClosure
+
+type Type = (Map Name DFA, DFA)
+
+type MType r = (Map Name (NFA r), NFA r)
+
+type Name = Word
+
+freeze :: (MonadFix m, MonadRef r m, MonadSupply Label m) => MType r -> m Type
+freeze (env, t) = evalFreezeT $ (,) <$> traverse toDFA env <*> toDFA t
+
+{-
+merge :: MonadRef r m => NFA r -> NFA r -> m ()
 merge x y = do
   writeRef x.cons =<< Set.union <$> readRef x.cons <*> readRef y.cons
   x_level <- readRef x.level
@@ -131,8 +216,8 @@ merge x y = do
   traverseSet (writeLevels x_level) y_flow
   writeRef x.flow =<< Set.union y_flow <$> readRef x.flow
 
-unify :: (MonadError () m, MonadRef r m) => Type r -> Type r -> m ()
-unify = curry $ visit_ $ \ rec (x, y) -> do
+unify :: (MonadError () m, MonadFix m, MonadRef r m) => NFA r -> NFA r -> m ()
+unify = curry $ visit_ $ \ recur (x, y) -> do
   x_cons <- readRef x.cons
   y_cons <- readRef y.cons
   when (not (y_cons `isSubsetOf` x_cons)) $
@@ -149,10 +234,8 @@ unify = curry $ visit_ $ \ rec (x, y) -> do
     let x' = x_trans!f
     sequence $
       if contra f
-      then curry rec <$> y' <*> x'
-      else curry rec <$> x' <*> y'
-
-type Name = Word
+      then curry recur <$> y' <*> x'
+      else curry recur <$> x' <*> y'
 
 data Exp
   = Var Name
@@ -193,33 +276,36 @@ newTypeFn x y =
 genLevel :: Word
 genLevel = maxBound
 
-inst :: ( MonadReader Level m
+inst :: ( MonadFix m
+        , MonadReader Level m
         , MonadRef r m
         , MonadSupply Label m
         ) => Type r -> m (Type r)
-inst = visit $ \ rec x -> do
+inst = visit $ \ recur x -> do
   x_level <- readRef x.level
   if x_level == genLevel
     then join $
          newType <$>
          readRef x.cons <*>
-         (traverse (traverse rec) =<< readRef x.trans) <*>
-         (traverseSet rec =<< readRef x.flow)
+         (traverse (traverse recur) =<< readRef x.trans) <*>
+         (traverseSet recur =<< readRef x.flow)
     else pure x
 
-gen :: ( MonadReader Level m
+gen :: ( MonadFix m
+       , MonadReader Level m
        , MonadRef r m
        , MonadSupply Label m
        ) => Type r -> m ()
-gen = visit_ $ \ rec x -> do
+gen = visit_ $ \ recur x -> do
   x_level <- readRef x.level
   y <- ask
   when (x_level > y) $ do
     writeRef x.level genLevel
-    traverse_ (traverse_ rec) =<< readRef x.trans
-    traverse_ rec =<< readRef x.flow
+    traverse_ (traverse_ recur) =<< readRef x.trans
+    traverse_ recur =<< readRef x.flow
 
 infer :: ( MonadError () m
+         , MonadFix m
          , MonadReader Level m
          , MonadRef r m
          , MonadSupply Label m
@@ -250,6 +336,6 @@ infer env = \ case
     gen t_e1
     let env = Map.insert x (True, t_e1) env
     infer env e2
-
+-}
 main :: IO ()
 main = pure ()
