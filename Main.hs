@@ -21,7 +21,7 @@ import Data.Foldable
 import Data.Functor
 import Data.IORef
 import Data.Maybe (fromMaybe)
-import Data.Map.Lazy (Map, (!))
+import Data.Map.Lazy (Map, (!?))
 import Data.Map.Lazy qualified as Map
 import Data.Ord
 import Data.STRef
@@ -177,18 +177,6 @@ transClosure x = traverse (foldlM epsilonClosure' mempty) =<< readRef x.trans
 foldMapM :: (Foldable f, Monad m, Monoid b) => (a -> m b) -> f a -> m b
 foldMapM f = foldrM (\ x z -> mappend z <$> f x) mempty
 
-foldMapM' :: (Foldable f, Monad m) => b -> (b -> b -> b) -> (a -> m b) -> f a -> m b
-foldMapM' zero plus f = foldrM (\ x z -> plus z <$> f x) zero
-
-filterMap :: Ord b => (a -> Maybe b) -> Set a -> Set b
-filterMap f xs = foldl' (\ z x -> maybe z (\ y -> Set.insert y z) (f x)) mempty xs
-
-filterMapM :: (Monad m, Ord b) => (a -> m (Maybe b)) -> Set a -> m (Set b)
-filterMapM f xs = foldlM (\ z x -> maybe z (\ y -> Set.insert y z) <$> f x) mempty xs
-
-bind :: (Foldable f, Monoid (f b)) => (a -> f b) -> f a -> f b
-bind f x = foldl' (\ z x -> z <> f x) mempty x
-
 type FixT s m = ReaderT s (WriterT s m)
 
 evalFixT :: MonadFix m => FixT s m a -> m a
@@ -220,8 +208,8 @@ toDFA' = fix $ \ recur xs -> get <&> Map.lookup xs >>= \ case
     DFA <$>
       supply <*>
       foldMapM (readRef . (.cons)) xs <*>
-      (traverse recur <=< foldMapM' mempty (Map.unionWith Set.union) transClosure) xs <*>
-      foldMapM (fmap (bind (fromMaybe mempty . flip Map.lookup env)) . readRef . (.flow)) xs
+      (traverse recur . coerce <=< foldMapM (fmap SemiMap . transClosure)) xs <*>
+      foldMapM (fmap (foldMap (fromMaybe mempty . (env!?))) . readRef . (.flow)) xs
 
 toDFA :: ( MonadFix m
          , MonadRef r m
@@ -237,6 +225,9 @@ type Name = Word
 
 freeze :: (MonadFix m, MonadRef r m, MonadSupply Label m) => MType r -> m Type
 freeze (env, t) = evalFreezeT $ (,) <$> traverse toDFA env <*> toDFA t
+
+thaw :: (MonadFix m, MonadRef r m, MonadSupply Label m) => Type -> m (MType r)
+thaw = undefined
 
 {-
 merge :: MonadRef r m => NFA r -> NFA r -> m ()
