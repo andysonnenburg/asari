@@ -9,17 +9,18 @@
 {-# LANGUAGE FunctionalDependencies #-}
 module Main (main) where
 
-import Control.Arrow ((***))
 import Control.Category (Category, (<<<))
 import Control.Monad
 import Control.Monad.Error.Class
-import Control.Monad.Reader.Class
-import Control.Monad.RWS.Strict
+import Control.Monad.Reader
 import Control.Monad.ST
 import Control.Monad.State.Strict
+import Control.Monad.Writer.Strict
+import Data.Coerce
 import Data.Foldable
 import Data.Functor
 import Data.IORef
+import Data.Maybe (fromMaybe)
 import Data.Map.Lazy (Map, (!))
 import Data.Map.Lazy qualified as Map
 import Data.Ord
@@ -44,7 +45,17 @@ instance MonadRef (STRef s) (ST s) where
   readRef = readSTRef
   writeRef = writeSTRef
 
-instance (Monoid w, MonadRef r m) => MonadRef r (RWST r' w s m) where
+instance MonadRef r m => MonadRef r (ReaderT r' m) where
+  newRef = lift . newRef
+  readRef = lift . readRef
+  writeRef x = lift . writeRef x
+
+instance MonadRef r m => MonadRef r (StateT s m) where
+  newRef = lift . newRef
+  readRef = lift . readRef
+  writeRef x = lift . writeRef x
+
+instance (Monoid w, MonadRef r m) => MonadRef r (WriterT w m) where
   newRef = lift . newRef
   readRef = lift . readRef
   writeRef x = lift . writeRef x
@@ -57,7 +68,13 @@ newtype SupplyT s m a = SupplyT (StateT s m a) deriving (Functor, Applicative, M
 instance (Num s, Monad m) => MonadSupply s (SupplyT s m) where
   supply = SupplyT $ state $ \ x -> (x, x + 1)
 
-instance (Monoid w, MonadSupply s m) => MonadSupply s (RWST r w s' m) where
+instance MonadSupply s m => MonadSupply s (ReaderT r m) where
+  supply = lift supply
+
+instance MonadSupply s m => MonadSupply s (StateT s' m) where
+  supply = lift supply
+
+instance (Monoid w, MonadSupply s m) => MonadSupply s (WriterT w m) where
   supply = lift supply
 
 traverseSet :: (Applicative f, Ord b) => (a -> f b) -> Set a -> f (Set b)
@@ -169,10 +186,26 @@ filterMap f xs = foldl' (\ z x -> maybe z (\ y -> Set.insert y z) (f x)) mempty 
 filterMapM :: (Monad m, Ord b) => (a -> m (Maybe b)) -> Set a -> m (Set b)
 filterMapM f xs = foldlM (\ z x -> maybe z (\ y -> Set.insert y z) <$> f x) mempty xs
 
-type FreezeT r = RWST (Map (NFA r) DFA) (Map (NFA r) DFA) (Map (Set (NFA r)) DFA)
+bind :: (Foldable f, Monoid (f b)) => (a -> f b) -> f a -> f b
+bind f x = foldl' (\ z x -> z <> f x) mempty x
+
+type FixT s m = ReaderT s (WriterT s m)
+
+evalFixT :: MonadFix m => FixT s m a -> m a
+evalFixT m = fmap fst $ mfix $ \ (_, s) -> runWriterT $ runReaderT m s
+
+newtype SemiMap k v = SemiMap { getSemiMap :: Map k v }
+
+instance (Ord k, Semigroup v) => Semigroup (SemiMap k v) where
+  x <> y = SemiMap $ Map.unionWith (<>) (coerce x) (coerce y)
+
+instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
+  mempty = SemiMap mempty
+
+type FreezeT r m = FixT (SemiMap (NFA r) (Set DFA)) (StateT (Map (Set (NFA r)) DFA) m)
 
 evalFreezeT :: MonadFix m => FreezeT r m a -> m a
-evalFreezeT m = fmap fst . mfix $ \ (x, env) -> evalRWST m env mempty
+evalFreezeT m = evalStateT (evalFixT m) mempty
 
 toDFA' :: ( MonadFix m
           , MonadRef r m
@@ -182,12 +215,13 @@ toDFA' = fix $ \ recur xs -> get <&> Map.lookup xs >>= \ case
   Just xs -> pure xs
   Nothing -> mfix $ \ y -> do
     modify $ Map.insert xs y
-    tell $ Map.fromList $ zip (toList xs) (repeat y)
+    tell $ coerce $ Map.fromSet (const (Set.singleton y)) xs
+    env <- coerce <$> ask
     DFA <$>
       supply <*>
       foldMapM (readRef . (.cons)) xs <*>
       (traverse recur <=< foldMapM' mempty (Map.unionWith Set.union) transClosure) xs <*>
-      foldMapM (filterMapM (flip fmap ask . Map.lookup) <=< readRef . (.flow)) xs
+      foldMapM (fmap (bind (fromMaybe mempty . flip Map.lookup env)) . readRef . (.flow)) xs
 
 toDFA :: ( MonadFix m
          , MonadRef r m
