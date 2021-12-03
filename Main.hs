@@ -21,7 +21,7 @@ import Data.Foldable
 import Data.Functor
 import Data.IORef
 import Data.Maybe (fromMaybe)
-import Data.Map.Lazy (Map, (!?))
+import Data.Map.Lazy (Map, findWithDefault)
 import Data.Map.Lazy qualified as Map
 import Data.Ord
 import Data.STRef
@@ -199,7 +199,7 @@ toDFA' :: ( MonadFix m
           , MonadRef r m
           , MonadSupply Label m
           ) => Set (NFA r) -> FreezeT r m DFA
-toDFA' = fix $ \ recur xs -> get <&> Map.lookup xs >>= \ case
+toDFA' = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
   Just xs -> pure xs
   Nothing -> mfix $ \ y -> do
     modify $ Map.insert xs y
@@ -209,7 +209,7 @@ toDFA' = fix $ \ recur xs -> get <&> Map.lookup xs >>= \ case
       supply <*>
       foldMapM (readRef . (.cons)) xs <*>
       (traverse recur . coerce <=< foldMapM (fmap SemiMap . transClosure)) xs <*>
-      foldMapM (fmap (foldMap (fromMaybe mempty . (env!?))) . readRef . (.flow)) xs
+      foldMapM (fmap (foldMap (flip (findWithDefault mempty) env)) . readRef . (.flow)) xs
 
 toDFA :: ( MonadFix m
          , MonadRef r m
@@ -226,20 +226,37 @@ type Name = Word
 freeze :: (MonadFix m, MonadRef r m, MonadSupply Label m) => MType r -> m Type
 freeze (env, t) = evalFreezeT $ (,) <$> traverse toDFA env <*> toDFA t
 
-thaw :: (MonadFix m, MonadRef r m, MonadSupply Label m) => Type -> m (MType r)
-thaw = undefined
+type ThawT r = StateT (Map DFA (NFA r))
 
-{-
+evalThawT :: Monad m => ThawT r m a -> m a
+evalThawT m = evalStateT m mempty
+
+toNFA :: ( MonadFix m
+         , MonadRef r m
+         , MonadSupply Label m
+         ) => DFA -> ThawT r m (NFA r)
+toNFA = fix $ \ recur x -> gets (Map.lookup x) >>= \ case
+  Just x -> pure x
+  Nothing -> mfix $ \ y -> do
+    modify $ Map.insert x y
+    NFA <$>
+      supply <*>
+      newRef x.cons <*>
+      (newRef =<< traverse (fmap Set.singleton . toNFA) x.trans) <*>
+      newRef mempty <*>
+      (newRef =<< foldMapM (fmap Set.singleton . toNFA) x.flow)
+
+thaw :: (MonadFix m, MonadRef r m, MonadSupply Label m) => Type -> m (MType r)
+thaw (env, t) = evalThawT $ (,) <$> traverse toNFA env <*> toNFA t
+
+minimize :: MonadSupply Label m => DFA -> m DFA
+minimize x = undefined
+
 merge :: MonadRef r m => NFA r -> NFA r -> m ()
 merge x y = do
   writeRef x.cons =<< Set.union <$> readRef x.cons <*> readRef y.cons
-  x_level <- readRef x.level
-  y_trans <- readRef y.trans
-  traverse (traverse (writeLevels x_level)) y_trans
-  writeRef x.trans =<< Map.unionWith (++) y_trans <$> readRef x.trans
-  y_flow <- readRef y.flow
-  traverseSet (writeLevels x_level) y_flow
-  writeRef x.flow =<< Set.union y_flow <$> readRef x.flow
+  writeRef x.trans =<< Map.unionWith (<>) <$> readRef y.trans <*> readRef x.trans
+  writeRef x.flow =<< (<>) <$> readRef x.flow <*> readRef y.flow
 
 unify :: (MonadError () m, MonadFix m, MonadRef r m) => NFA r -> NFA r -> m ()
 unify = curry $ visit_ $ \ recur (x, y) -> do
@@ -256,11 +273,13 @@ unify = curry $ visit_ $ \ recur (x, y) -> do
   x_trans <- readRef x.trans
   y_trans <- readRef y.trans
   forWithKey_ y_trans $ \ f y' -> do
-    let x' = x_trans!f
-    sequence $
-      if contra f
-      then curry recur <$> y' <*> x'
-      else curry recur <$> x' <*> y'
+    case Map.lookup f x_trans of
+      Nothing -> throwError ()
+      Just x' ->
+        sequence $
+        if contra f
+        then curry recur <$> toList y' <*> toList x'
+        else curry recur <$> toList x' <*> toList y'
 
 data Exp
   = Var Name
@@ -268,99 +287,63 @@ data Exp
   | App Exp Exp
   | Let Name Exp Exp deriving Show
 
-type Env r = Map Name (Bool, Type r)
+type Env = Map Name Type
 
-newType :: ( MonadReader Level m
-           , MonadRef r m
-           , MonadSupply Label m
-           ) => Set Cons -> Trans r -> Flow r -> m (Type r)
-newType cons trans flow =
-  Type <$>
+newNFA :: ( MonadRef r m
+          , MonadSupply Label m
+          ) => Set Cons -> Map Symbol (Set (NFA r)) -> Set (NFA r) -> Set (NFA r) -> m (NFA r)
+newNFA cons trans epsilonTrans flow =
+  NFA <$>
   supply <*>
-  (newRef =<< ask) <*>
   newRef cons <*>
   newRef trans <*>
+  newRef epsilonTrans <*>
   newRef flow
 
-fresh :: ( MonadReader Level m
-         , MonadRef r m
+fresh :: ( MonadRef r m
          , MonadSupply Label m
-         ) => m (Type r)
-fresh = newType Set.empty Map.empty Set.empty
+         ) => m (NFA r)
+fresh = newNFA mempty mempty mempty mempty
 
-newTypeFn :: ( MonadReader Level m
-             , MonadRef r m
-             , MonadSupply Label m
-             ) => Type r -> Type r -> m (Type r)
-newTypeFn x y =
-  newType
+newFn :: ( MonadRef r m
+           , MonadSupply Label m
+           ) => NFA r -> NFA r -> m (NFA r)
+newFn x y =
+  newNFA
   (Set.singleton Fn)
-  (Map.fromList [(Domain, [x]), (Range, [y])])
-  Set.empty
+  (Map.fromList [(Domain, Set.singleton x), (Range, Set.singleton y)])
+  mempty
+  mempty
 
-genLevel :: Word
-genLevel = maxBound
-
-inst :: ( MonadFix m
-        , MonadReader Level m
-        , MonadRef r m
-        , MonadSupply Label m
-        ) => Type r -> m (Type r)
-inst = visit $ \ recur x -> do
-  x_level <- readRef x.level
-  if x_level == genLevel
-    then join $
-         newType <$>
-         readRef x.cons <*>
-         (traverse (traverse recur) =<< readRef x.trans) <*>
-         (traverseSet recur =<< readRef x.flow)
-    else pure x
-
-gen :: ( MonadFix m
-       , MonadReader Level m
-       , MonadRef r m
-       , MonadSupply Label m
-       ) => Type r -> m ()
-gen = visit_ $ \ recur x -> do
-  x_level <- readRef x.level
-  y <- ask
-  when (x_level > y) $ do
-    writeRef x.level genLevel
-    traverse_ (traverse_ recur) =<< readRef x.trans
-    traverse_ recur =<< readRef x.flow
+union :: MonadRef r m => Map Name (NFA r) -> Map Name (NFA r) -> m (Map Name (NFA r))
+union = undefined
 
 infer :: ( MonadError () m
          , MonadFix m
-         , MonadReader Level m
          , MonadRef r m
          , MonadSupply Label m
-         ) => Env r -> Exp -> m (Type r)
+         ) => Env -> Exp -> m (MType r)
 infer env = \ case
   Var x -> case Map.lookup x env of
-    Nothing ->
-      throwError ()
-    Just (False, t) -> do
-      t' <- newType Set.empty Map.empty (Set.singleton t)
-      writeRef t.flow =<< Set.insert t' <$> readRef t.flow
-      pure t'
-    Just (True, t) ->
-      inst t
+    Just t -> thaw t
+    Nothing -> mdo
+      t_neg <- newNFA mempty mempty mempty (Set.singleton t_pos)
+      t_pos <- newNFA mempty mempty mempty (Set.singleton t_neg)
+      pure (Map.singleton x t_neg, t_pos)
   Abs x e -> do
-    t_x <- fresh
-    let env = Map.insert x (False, t_x) env
-    t_e <- infer env e
-    newTypeFn t_x t_e
+    (env_e, t_e) <- infer env e
+    case Map.lookup x env_e of
+      Just t_x -> (Map.delete x env_e,) <$> newFn t_x t_e
+      Nothing -> (env_e,) <$> join (newFn <$> fresh <*> pure t_e)
   App e1 e2 -> do
-    t_e1 <- infer env e1
-    t_e2 <- infer env e2
+    (env_e1, t_e1) <- infer env e1
+    (env_e2, t_e2) <- infer env e2
     t_a <- fresh
-    unify t_e1 =<< newTypeFn t_e2 t_a
-    pure t_a
+    unify t_e1 =<< newFn t_e2 t_a
+    (,) <$> union env_e1 env_e2 <*> pure t_a
   Let x e1 e2 -> do
-    t_e1 <- local succ (infer env e1)
-    gen t_e1
-    let env = Map.insert x (True, t_e1) env
-    infer env e2
--}
+    t_e1 <- freeze =<< infer env e1
+    infer (Map.insert x t_e1 env) e2
+
 main :: IO ()
 main = pure ()
