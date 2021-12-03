@@ -12,6 +12,7 @@ module Main (main) where
 import Control.Category (Category, (<<<))
 import Control.Monad
 import Control.Monad.Error.Class
+import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.ST
 import Control.Monad.State.Strict
@@ -23,6 +24,7 @@ import Data.IORef
 import Data.Maybe (fromMaybe)
 import Data.Map.Lazy (Map, findWithDefault)
 import Data.Map.Lazy qualified as Map
+import Data.Map.Merge.Lazy qualified as Map
 import Data.Ord
 import Data.STRef
 import Data.Set (Set, isSubsetOf)
@@ -45,6 +47,11 @@ instance MonadRef (STRef s) (ST s) where
   readRef = readSTRef
   writeRef = writeSTRef
 
+instance MonadRef r m => MonadRef r (ExceptT e m) where
+  newRef = lift . newRef
+  readRef = lift . readRef
+  writeRef x = lift . writeRef x
+
 instance MonadRef r m => MonadRef r (ReaderT r' m) where
   newRef = lift . newRef
   readRef = lift . readRef
@@ -65,6 +72,15 @@ class Monad m => MonadSupply s m | m -> s where
 
 newtype SupplyT s m a = SupplyT (StateT s m a) deriving (Functor, Applicative, Monad)
 
+deriving instance MonadError e m => MonadError e (SupplyT s m)
+
+deriving instance MonadFix m => MonadFix (SupplyT s m)
+
+deriving instance MonadRef r m => MonadRef r (SupplyT s m)
+
+runSupplyT :: (Num s, Monad m) => SupplyT s m a -> m a
+runSupplyT (SupplyT m) = evalStateT m 0
+
 instance (Num s, Monad m) => MonadSupply s (SupplyT s m) where
   supply = SupplyT $ state $ \ x -> (x, x + 1)
 
@@ -76,10 +92,6 @@ instance MonadSupply s m => MonadSupply s (StateT s' m) where
 
 instance (Monoid w, MonadSupply s m) => MonadSupply s (WriterT w m) where
   supply = lift supply
-
-traverseSet :: (Applicative f, Ord b) => (a -> f b) -> Set a -> f (Set b)
-traverseSet f =
-  foldl' (\ m x -> Set.insert <$> f x <*> m) (pure Set.empty)
 
 forWithKey_ :: Applicative f => Map a b -> (a -> b -> f c) -> f ()
 forWithKey_ xs f =
@@ -103,21 +115,9 @@ visit_ :: ( Ord a
           ) => ((a -> StateT (Set a) m ()) -> a -> StateT (Set a) m b) -> a -> m ()
 visit_ f = runMemoT $$$ fix $ memo_ . f
 
-memo :: (Ord a, MonadFix m, MonadState (Map a b) m) => (a -> m b) -> a -> m b
-memo f x = get <&> Map.lookup x >>= \ case
-  Just x' -> pure x'
-  Nothing -> mdo
-    modify (Map.insert x x')
-    x' <- f x
-    pure x'
-
-visit :: ( Ord a
-         , MonadFix m
-         ) => ((a -> StateT (Map a b) m b) -> a -> StateT (Map a b) m b) -> a -> m b
-visit f = runMemoT $$$ fix $ memo . f
-
 data Cons
-  = Ref
+  = Void
+  | Ref
   | Fn deriving (Show, Eq, Ord)
 
 data Symbol
@@ -154,7 +154,7 @@ data DFA = DFA
   , cons :: Set Cons
   , trans :: Map Symbol DFA
   , flow :: Set DFA
-  }
+  } deriving Show
 
 instance Eq DFA where
   x == y = getField @"label" x == getField @"label" y
@@ -180,7 +180,7 @@ foldMapM f = foldrM (\ x z -> mappend z <$> f x) mempty
 type FixT s m = ReaderT s (WriterT s m)
 
 evalFixT :: MonadFix m => FixT s m a -> m a
-evalFixT m = fmap fst $ mfix $ \ (_, s) -> runWriterT $ runReaderT m s
+evalFixT m = fmap fst $ mfix $ \ ~(_, s) -> runWriterT $ runReaderT m s
 
 newtype SemiMap k v = SemiMap { getSemiMap :: Map k v }
 
@@ -285,7 +285,8 @@ data Exp
   = Var Name
   | Abs Name Exp
   | App Exp Exp
-  | Let Name Exp Exp deriving Show
+  | Let Name Exp Exp
+  | Unit deriving Show
 
 type Env = Map Name Type
 
@@ -315,8 +316,11 @@ newFn x y =
   mempty
   mempty
 
-union :: MonadRef r m => Map Name (NFA r) -> Map Name (NFA r) -> m (Map Name (NFA r))
-union = undefined
+union :: ( MonadRef r m
+         , MonadSupply Label m
+         ) => Map Name (NFA r) -> Map Name (NFA r) -> m (Map Name (NFA r))
+union = Map.mergeA Map.preserveMissing Map.preserveMissing $ Map.zipWithAMatched $ \ _ x y ->
+  newNFA mempty mempty (Set.fromList [x, y]) mempty
 
 infer :: ( MonadError () m
          , MonadFix m
@@ -344,6 +348,13 @@ infer env = \ case
   Let x e1 e2 -> do
     t_e1 <- freeze =<< infer env e1
     infer (Map.insert x t_e1 env) e2
+  Unit ->
+    (mempty,) <$> newNFA (Set.singleton Void) mempty mempty mempty
+
+infer' :: Exp -> Maybe Type
+infer' env =
+  either (const Nothing) Just $
+  runST (runExceptT $ runSupplyT $ freeze =<< infer mempty env)
 
 main :: IO ()
 main = pure ()
