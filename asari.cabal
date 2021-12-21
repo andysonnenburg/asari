@@ -20,16 +20,11 @@ version:            0.1.0.0
 -- An email address to which users can send suggestions, bug reports, and patches.
 -- maintainer:
 
--- A copyright notice.
--- copyright:
--- category:
-extra-source-files: CHANGELOG.md
-
 executable asari
     main-is:          Main.hs
 
     -- Modules included in this executable, other than Main.
-    other-modules: Set, Shallow
+    other-modules: FA, Ref, Set, Shallow, Supply
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

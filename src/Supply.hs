@@ -1,0 +1,44 @@
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE StandaloneDeriving #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+module Supply
+  ( MonadSupply (..)
+  , SupplyT
+  , runSupplyT
+  ) where
+
+import Control.Monad.Error.Class
+import Control.Monad.Reader
+import Control.Monad.State.Strict
+import Control.Monad.Writer.Strict
+
+import Ref
+
+class Monad m => MonadSupply s m | m -> s where
+  supply :: m s
+
+newtype SupplyT s m a = SupplyT (StateT s m a) deriving (Functor, Applicative, Monad)
+
+deriving instance MonadError e m => MonadError e (SupplyT s m)
+
+deriving instance MonadFix m => MonadFix (SupplyT s m)
+
+deriving instance MonadRef r m => MonadRef r (SupplyT s m)
+
+runSupplyT :: (Num s, Monad m) => SupplyT s m a -> m a
+runSupplyT (SupplyT m) = evalStateT m 0
+
+instance (Num s, Monad m) => MonadSupply s (SupplyT s m) where
+  supply = SupplyT $ state $ \ x -> (x, x + 1)
+
+instance MonadSupply s m => MonadSupply s (ReaderT r m) where
+  supply = lift supply
+
+instance MonadSupply s m => MonadSupply s (StateT s' m) where
+  supply = lift supply
+
+instance (Monoid w, MonadSupply s m) => MonadSupply s (WriterT w m) where
+  supply = lift supply

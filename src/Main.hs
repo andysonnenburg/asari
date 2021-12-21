@@ -6,7 +6,6 @@
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE StandaloneDeriving #-}
@@ -42,73 +41,15 @@ import Data.Ord
 import Data.STRef
 import Data.Word
 import GHC.Exts (dataToTag#)
-import GHC.Records (getField)
 import Prettyprinter
 
+import FA
+import Ref
+import Supply
+import Ref
 import Set (Set, isSubsetOf)
 import Set qualified as Set
 import Shallow
-
-class Monad m => MonadRef r m | m -> r where
-  newRef :: a -> m (r a)
-  readRef :: r a -> m a
-  writeRef :: r a -> a -> m ()
-
-instance MonadRef IORef IO where
-  newRef = newIORef
-  readRef = readIORef
-  writeRef = writeIORef
-
-instance MonadRef (STRef s) (ST s) where
-  newRef = newSTRef
-  readRef = readSTRef
-  writeRef = writeSTRef
-
-instance MonadRef r m => MonadRef r (ExceptT e m) where
-  newRef = lift . newRef
-  readRef = lift . readRef
-  writeRef x = lift . writeRef x
-
-instance MonadRef r m => MonadRef r (ReaderT r' m) where
-  newRef = lift . newRef
-  readRef = lift . readRef
-  writeRef x = lift . writeRef x
-
-instance MonadRef r m => MonadRef r (StateT s m) where
-  newRef = lift . newRef
-  readRef = lift . readRef
-  writeRef x = lift . writeRef x
-
-instance (Monoid w, MonadRef r m) => MonadRef r (WriterT w m) where
-  newRef = lift . newRef
-  readRef = lift . readRef
-  writeRef x = lift . writeRef x
-
-class Monad m => MonadSupply s m | m -> s where
-  supply :: m s
-
-newtype SupplyT s m a = SupplyT (StateT s m a) deriving (Functor, Applicative, Monad)
-
-deriving instance MonadError e m => MonadError e (SupplyT s m)
-
-deriving instance MonadFix m => MonadFix (SupplyT s m)
-
-deriving instance MonadRef r m => MonadRef r (SupplyT s m)
-
-runSupplyT :: (Num s, Monad m) => SupplyT s m a -> m a
-runSupplyT (SupplyT m) = evalStateT m 0
-
-instance (Num s, Monad m) => MonadSupply s (SupplyT s m) where
-  supply = SupplyT $ state $ \ x -> (x, x + 1)
-
-instance MonadSupply s m => MonadSupply s (ReaderT r m) where
-  supply = lift supply
-
-instance MonadSupply s m => MonadSupply s (StateT s' m) where
-  supply = lift supply
-
-instance (Monoid w, MonadSupply s m) => MonadSupply s (WriterT w m) where
-  supply = lift supply
 
 forWithKey_ :: Applicative f => Map a b -> (a -> b -> f c) -> f ()
 forWithKey_ xs f =
@@ -137,115 +78,14 @@ data Trans a
   | Ref a a
   | Fn a a deriving (Show, Functor, Foldable, Traversable)
 
-type Label = Word
+type Type = (Map Name (DFA Trans), DFA Trans)
 
-data NFA r f = NFA
-  { label :: Label
-  , trans :: r (Set (Shallow (f (Set (NFA r f)))))
-  , epsilonTrans :: r (Set (NFA r f))
-  , flow :: r (Set (NFA r f))
-  }
-
-instance Eq (NFA r) where
-  x == y = getField @"label" x == getField @"label" y
-
-instance Ord (NFA r) where
-  compare = comparing $ getField @"label"
-
-data DFA f = DFA
-  { label :: Label
-  , trans :: Set (Shallow (f DFA))
-  , flow :: Set DFA
-  }
-
-instance Eq DFA where
-  x == y = getField @"label" x == getField @"label" y
-
-instance Ord DFA where
-  compare = comparing $ getField @"label"
-
-instance Pretty DFA where
-  pretty = undefined
-
-epsilonClosure' :: MonadRef r m => Set (NFA r f) -> NFA r f -> m (Set (NFA r f))
-epsilonClosure' = fix $ \ recur xs x ->
-  if Set.member x xs
-  then pure xs
-  else foldlM recur (Set.insert x xs) =<< readRef x.epsilonTrans
-
-epsilonClosure :: MonadRef r m => NFA r f -> m (Set (NFA r f))
-epsilonClosure = epsilonClosure' mempty
-  
-transClosure :: (MonadFix m, MonadRef r m) => NFA r -> m (TransSet (Set (NFA r)))
-transClosure x = traverse (foldlM epsilonClosure' mempty) =<< readRef x.trans
-
-foldMapM :: (Foldable f, Monad m, Monoid b) => (a -> m b) -> f a -> m b
-foldMapM f = foldrM (\ x z -> mappend z <$> f x) mempty
-
-type FixT s m = ReaderT s (WriterT s m)
-
-evalFixT :: MonadFix m => FixT s m a -> m a
-evalFixT m = fmap fst $ mfix $ \ ~(_, s) -> runWriterT $ runReaderT m s
-
-newtype SemiSet a = SemiSet { getSemiSet :: Set a }
-
-instance (Ord k, Semigroup k) => Semigroup (SemiSet k v) where
-  x <> y = SemiSet $ Set.unionWith (<>) (coerce x) (coerce y)
-
-instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
-  mempty = SemiMap mempty
-
-type FreezeT r m = FixT (SemiMap (NFA r) (Set DFA)) (StateT (Map (Set (NFA r)) DFA) (SupplyT Label m))
-
-evalFreezeT :: MonadFix m => FreezeT r m a -> m a
-evalFreezeT m = runSupplyT (evalStateT (evalFixT m) mempty)
-
-toDFA' :: ( MonadFix m
-          , MonadRef r m
-          ) => Set (NFA r) -> FreezeT r m DFA
-toDFA' = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
-  Just xs -> pure xs
-  Nothing -> mfix $ \ y -> do
-    modify $ Map.insert xs y
-    tell $ coerce $ Map.fromSet (const (Set.singleton y)) xs
-    env <- coerce <$> ask
-    DFA <$>
-      supply <*>
-      (traverse recur <=< foldlM (\ z x -> transClosuretransClosure) xs <*>
-      foldMapM (fmap (foldMap (flip (findWithDefault mempty) env)) . readRef . (.flow)) xs
-
-toDFA :: ( MonadFix m
-         , MonadRef r m
-         ) => NFA r -> FreezeT r m DFA
-toDFA = toDFA' <=< epsilonClosure
-
-type Type = (Map Name DFA, DFA)
-
-type MType r = (Map Name (NFA r), NFA r)
+type MType r = (Map Name (NFA r f), NFA r f)
 
 type Name = Word
 
 freeze :: (MonadFix m, MonadRef r m) => MType r -> m Type
 freeze (env, t) = evalFreezeT $ (,) <$> traverse toDFA env <*> toDFA t
-
-type ThawT r = StateT (Map DFA (NFA r))
-
-evalThawT :: Monad m => ThawT r m a -> m a
-evalThawT m = evalStateT m mempty
-
-toNFA :: ( MonadFix m
-         , MonadRef r m
-         , MonadSupply Label m
-         ) => DFA -> ThawT r m (NFA r)
-toNFA = fix $ \ recur x -> gets (Map.lookup x) >>= \ case
-  Just x -> pure x
-  Nothing -> mfix $ \ y -> do
-    modify $ Map.insert x y
-    NFA <$>
-      supply <*>
-      (newRef =<< traverse (fmap Set.singleton . toNFA) x.trans) <*>
-      newRef mempty <*>
-      (newRef =<< foldMapM (fmap Set.singleton . toNFA) x.flow)
 
 thaw :: (MonadFix m, MonadRef r m, MonadSupply Label m) => Type -> m (MType r)
 thaw (env, t) = evalThawT $ (,) <$> traverse toNFA env <*> toNFA t
@@ -288,7 +128,7 @@ type Env = Map Name Type
 
 newNFA :: ( MonadRef r m
           , MonadSupply Label m
-          ) => TransSet (Set (NFA r))) -> Set (NFA r) -> Set (NFA r) -> m (NFA r)
+          ) => TransSet (Set (NFA r)) -> Set (NFA r) -> Set (NFA r) -> m (NFA r)
 newNFA cons trans epsilonTrans flow =
   NFA <$>
   supply <*>
