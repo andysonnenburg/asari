@@ -24,7 +24,6 @@ import Control.Monad.State.Strict
 import Control.Monad.Writer.Strict
 import Data.Coerce
 import Data.Foldable
-import Data.Functor.Apply
 import Data.Functor.Classes
 import Data.Map (Map, findWithDefault)
 import Data.Map qualified as Map
@@ -34,14 +33,14 @@ import GHC.Records (getField)
 import Ref
 import Set (Set)
 import Set qualified
-import Shallow
+import State qualified
 import Supply
 
 type Label = Word
 
 data NFA r f = NFA
   { label :: Label
-  , trans :: r (Set (Shallow f (Set (NFA r f))))
+  , trans :: r (f (Set (NFA r f)))
   , epsilonTrans :: r (Set (NFA r f))
   , flow :: r (Set (NFA r f))
   }
@@ -54,7 +53,7 @@ instance Ord (NFA r f) where
 
 data DFA f = DFA
   { label :: Label
-  , trans :: Set (Shallow f (DFA f))
+  , trans :: f (DFA f)
   , flow :: Set (DFA f)
   }
 
@@ -73,11 +72,10 @@ epsilonClosure' = fix $ \ recur xs x ->
 epsilonClosure :: MonadRef r m => NFA r f -> m (Set (NFA r f))
 epsilonClosure = epsilonClosure' mempty
 
-transClosure :: ( Traversable f
-                , Ord1 f
+transClosure :: ( State.Map f
                 , MonadRef r m
-                ) => NFA r f -> m (Set (Shallow f (Set (NFA r f))))
-transClosure x = Set.traverse (traverse (foldlM epsilonClosure' mempty)) =<< readRef x.trans
+                ) => NFA r f -> m (f (Set (NFA r f)))
+transClosure x = traverse (foldlM epsilonClosure' mempty) =<< readRef x.trans
 
 foldMapM :: (Foldable f, Monad m, Monoid b) => (a -> m b) -> f a -> m b
 foldMapM f = foldrM (\ x z -> mappend z <$> f x) mempty
@@ -103,13 +101,11 @@ type FreezeT r f m =
 evalFreezeT :: MonadFix m => FreezeT r f m a -> m a
 evalFreezeT m = runSupplyT (evalStateT (evalFixT m) mempty)
 
-toDFA' :: ( Apply f
-          , Ord1 f
-          , Traversable f
+toDFA' :: ( State.Map f
           , MonadFix m
           , MonadRef r m
-          ) => Set (NFA r f) -> FreezeT r f m (DFA f)
-toDFA' = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
+          ) => Bool -> Set (NFA r f) -> FreezeT r f m (DFA f)
+toDFA' p = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
   Just y -> pure y
   Nothing -> mfix $ \ y -> do
     modify $ Map.insert xs y
@@ -117,16 +113,14 @@ toDFA' = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
     env <- coerce <$> ask
     DFA <$>
       supply <*>
-      (Set.traverse (traverse recur) <=< foldlM (\ z -> fmap (Set.unionWith (liftF2 (<>)) z) . transClosure) mempty) xs <*>
+      undefined xs <*>
       foldMapM (fmap (foldMap (flip (findWithDefault mempty) env)) . readRef . (.flow)) xs
 
-toDFA :: ( Apply f
-         , Ord1 f
-         , Traversable f
+toDFA :: ( State.Map f
          , MonadFix m
          , MonadRef r m
-         ) => NFA r f -> FreezeT r f m (DFA f)
-toDFA = toDFA' <=< epsilonClosure
+         ) => Bool -> NFA r f -> FreezeT r f m (DFA f)
+toDFA p = toDFA' p <=< epsilonClosure
 
 type ThawT r f = StateT (Map (DFA f) (NFA r f))
 
@@ -144,6 +138,6 @@ toNFA = fix $ \ recur x -> gets (Map.lookup x) >>= \ case
     modify $ Map.insert x y
     NFA <$>
       supply <*>
-      (newRef =<< Set.mapMonotonicM (traverse (fmap Set.singleton . recur)) x.trans) <*>
+      (newRef <=< traverse (fmap Set.singleton . recur)) x.trans <*>
       newRef mempty <*>
-      (newRef =<< Set.traverse recur x.flow)
+      (newRef <=< Set.traverse recur) x.flow

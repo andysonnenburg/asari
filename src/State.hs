@@ -5,7 +5,7 @@ module State
 
 import Data.Kind (Type)
 
-class Map f where
+class Traversable f => Map f where
   type Key f :: Type -> Type
   empty :: f a
   singleton :: Key f a -> f a

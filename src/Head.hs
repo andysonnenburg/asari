@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 module Head
   ( Head (..)
@@ -8,6 +9,7 @@ module Head
 
 import Data.Map qualified as Ord (Map)
 import Data.Map qualified as Ord.Map
+import Data.Maybe (catMaybes)
 
 import State
 
@@ -16,7 +18,7 @@ data Head a
   | Ref a a
   | Fn a a
   | Struct (Ord.Map String a)
-  | Union (Ord.Map String a)
+  | Union (Ord.Map String a) deriving Show
 
 data HeadMap a
   = HeadMap
@@ -25,7 +27,18 @@ data HeadMap a
     , fn :: Maybe (a, a)
     , struct :: Maybe (Ord.Map String a)
     , union :: Maybe (Ord.Map String a)
-    }
+    } deriving (Functor, Foldable, Traversable)
+
+instance Show a => Show (HeadMap a) where
+  showsPrec prec = showParen (prec > 10) . (showString "fromList " .) . shows . toList
+
+toList :: HeadMap a -> [Head a]
+toList HeadMap {..} = catMaybes
+  $ (if void then Just Void else Nothing)
+  : (uncurry Ref <$> ref)
+  : (uncurry Fn <$> fn)
+  : (Struct <$> struct)
+  : [Union <$> union]  
 
 unionMaybe :: (a -> a -> a) -> Maybe a -> Maybe a -> Maybe a
 unionMaybe f = curry $ \ case
