@@ -5,6 +5,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 module FA
   ( Label
   , NFA (..)
@@ -17,12 +18,15 @@ module FA
   , toNFA
   ) where
 
+import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Control.Monad.Writer.Strict
 import Data.Coerce
 import Data.Foldable
-import Data.Map (Map)
+import Data.Functor.Apply
+import Data.Functor.Classes
+import Data.Map (Map, findWithDefault)
 import Data.Map qualified as Map
 import Data.Ord
 import GHC.Records (getField)
@@ -69,8 +73,11 @@ epsilonClosure' = fix $ \ recur xs x ->
 epsilonClosure :: MonadRef r m => NFA r f -> m (Set (NFA r f))
 epsilonClosure = epsilonClosure' mempty
 
-transClosure :: (MonadFix m, MonadRef r m) => NFA r -> m (TransSet (Set (NFA r)))
-transClosure x = traverse (foldlM epsilonClosure' mempty) =<< readRef x.trans
+transClosure :: ( Traversable f
+                , Ord1 f
+                , MonadRef r m
+                ) => NFA r f -> m (Set (Shallow f (Set (NFA r f))))
+transClosure x = Set.traverse (traverse (foldlM epsilonClosure' mempty)) =<< readRef x.trans
 
 foldMapM :: (Foldable f, Monad m, Monoid b) => (a -> m b) -> f a -> m b
 foldMapM f = foldrM (\ x z -> mappend z <$> f x) mempty
@@ -96,7 +103,10 @@ type FreezeT r f m =
 evalFreezeT :: MonadFix m => FreezeT r f m a -> m a
 evalFreezeT m = runSupplyT (evalStateT (evalFixT m) mempty)
 
-toDFA' :: ( MonadFix m
+toDFA' :: ( Apply f
+          , Ord1 f
+          , Traversable f
+          , MonadFix m
           , MonadRef r m
           ) => Set (NFA r f) -> FreezeT r f m (DFA f)
 toDFA' = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
@@ -107,10 +117,13 @@ toDFA' = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
     env <- coerce <$> ask
     DFA <$>
       supply <*>
-      (traverse recur <=< foldlM (\ z x -> transClosure)) xs <*>
+      (Set.traverse (traverse recur) <=< foldlM (\ z -> fmap (Set.unionWith (liftF2 (<>)) z) . transClosure) mempty) xs <*>
       foldMapM (fmap (foldMap (flip (findWithDefault mempty) env)) . readRef . (.flow)) xs
 
-toDFA :: ( MonadFix m
+toDFA :: ( Apply f
+         , Ord1 f
+         , Traversable f
+         , MonadFix m
          , MonadRef r m
          ) => NFA r f -> FreezeT r f m (DFA f)
 toDFA = toDFA' <=< epsilonClosure

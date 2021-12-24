@@ -28,6 +28,6 @@ executable asari
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
-    build-depends:    base ^>=4.16.0.0, containers, mtl, prettyprinter
+    build-depends:    base ^>=4.16.0.0, containers, mtl, prettyprinter, semigroupoids
     hs-source-dirs:   src
-    default-language: Haskell2010
+    default-language: Haskell20
