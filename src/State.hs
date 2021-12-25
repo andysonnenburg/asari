@@ -5,10 +5,10 @@ module State
 
 import Data.Kind (Type)
 
-class Traversable f => Map f where
-  type Key f :: Type -> Type
-  empty :: f a
-  singleton :: Key f a -> f a
-  traverse' :: Applicative m => (a -> m b) -> (a -> m b) -> f a -> m (f b)
-  unionWith :: (a -> a -> a) -> f a -> f a -> f a
-  intersectionWith :: (a -> a -> a) -> f a -> f a -> f a
+class Traversable t => Map t where
+  type Key t :: Type -> Type
+  empty :: t a
+  singleton :: Key t a -> t a
+  bitraverse :: Applicative f => (a -> f b) -> (a -> f b) -> t a -> f (t b)
+  unionWith :: (a -> a -> a) -> t a -> t a -> t a
+  intersectionWith :: (a -> a -> a) -> t a -> t a -> t a

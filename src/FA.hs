@@ -130,9 +130,11 @@ fromNegNFA' xs = gets (Map.lookup xs) >>= \ case
     putDFA xs y >>
     DFA <$> supply <*> getDFATrans xs <*> getDFAFlow xs
   where
-    getDFATrans = recur <=< foldMapM' append State.empty transClosure
-    recur = State.traverse' fromPosNFA' fromNegNFA'
-    append = State.intersectionWith (<>)
+    getDFATrans =
+      foldMapM' append State.empty transClosure >=>
+      State.bitraverse fromPosNFA' fromNegNFA'
+    append =
+      State.intersectionWith (<>)
 
 fromPosNFA' :: ( State.Map t
                , MonadFix m
@@ -144,9 +146,11 @@ fromPosNFA' xs = gets (Map.lookup xs) >>= \ case
     putDFA xs y >>
     DFA <$> supply <*> getDFATrans xs <*> getDFAFlow xs
   where
-    getDFATrans = recur <=< foldMapM' append State.empty transClosure
-    recur = State.traverse' fromNegNFA' fromPosNFA'
-    append = State.unionWith (<>)
+    getDFATrans =
+      foldMapM' append State.empty transClosure >=>
+      State.bitraverse fromNegNFA' fromPosNFA'
+    append =
+      State.unionWith (<>)
 
 fromNegNFA :: ( State.Map t
               , MonadFix m
