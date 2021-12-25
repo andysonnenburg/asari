@@ -5,27 +5,25 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE QuantifiedConstraints #-}
 module FA
   ( Label
   , NFA (..)
   , DFA (..)
   , FreezeT
   , evalFreezeT
-  , toDFA
+  , fromNegNFA
+  , fromPosNFA
   , ThawT
   , evalThawT
-  , toNFA
+  , fromDFA
   ) where
 
-import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Control.Monad.Writer.Strict
 import Data.Coerce
 import Data.Foldable
-import Data.Functor.Classes
-import Data.Map (Map, findWithDefault)
+import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Ord
 import GHC.Records (getField)
@@ -38,106 +36,145 @@ import Supply
 
 type Label = Word
 
-data NFA r f = NFA
+data NFA r t = NFA
   { label :: Label
-  , trans :: r (f (Set (NFA r f)))
-  , epsilonTrans :: r (Set (NFA r f))
-  , flow :: r (Set (NFA r f))
+  , trans :: r (t (Set (NFA r t)))
+  , epsilonTrans :: r (Set (NFA r t))
+  , flow :: r (Set (NFA r t))
   }
 
-instance Eq (NFA r f) where
+instance Eq (NFA r t) where
   x == y = getField @"label" x == getField @"label" y
 
-instance Ord (NFA r f) where
+instance Ord (NFA r t) where
   compare = comparing $ getField @"label"
 
-data DFA f = DFA
+data DFA t = DFA
   { label :: Label
-  , trans :: f (DFA f)
-  , flow :: Set (DFA f)
+  , trans :: t (DFA t)
+  , flow :: Set (DFA t)
   }
 
-instance Eq (DFA f) where
+instance Eq (DFA t) where
   x == y = getField @"label" x == getField @"label" y
 
-instance Ord (DFA f) where
+instance Ord (DFA t) where
   compare = comparing $ getField @"label"
 
-epsilonClosure' :: MonadRef r m => Set (NFA r f) -> NFA r f -> m (Set (NFA r f))
+epsilonClosure' :: MonadRef r m => Set (NFA r t) -> NFA r t -> m (Set (NFA r t))
 epsilonClosure' = fix $ \ recur xs x ->
   if Set.member x xs
   then pure xs
   else foldlM recur (Set.insert x xs) =<< readRef x.epsilonTrans
 
-epsilonClosure :: MonadRef r m => NFA r f -> m (Set (NFA r f))
+epsilonClosure :: MonadRef r m => NFA r t -> m (Set (NFA r t))
 epsilonClosure = epsilonClosure' mempty
 
-transClosure :: ( State.Map f
+transClosure :: ( State.Map t
                 , MonadRef r m
-                ) => NFA r f -> m (f (Set (NFA r f)))
+                ) => NFA r t -> m (t (Set (NFA r t)))
 transClosure x = traverse (foldlM epsilonClosure' mempty) =<< readRef x.trans
 
-foldMapM :: (Foldable f, Monad m, Monoid b) => (a -> m b) -> f a -> m b
-foldMapM f = foldrM (\ x z -> mappend z <$> f x) mempty
+foldMapM' :: (Foldable t, Monad m) => (b -> b -> b) -> b -> (a -> m b) -> t a -> m b
+foldMapM' append empty f = foldrM (\ x z -> append z <$> f x) empty
+
+foldMapM :: (Foldable t, Monad m, Monoid b) => (a -> m b) -> t a -> m b
+foldMapM = foldMapM' mappend mempty
 
 type FixT s m = ReaderT s (WriterT s m)
 
 evalFixT :: MonadFix m => FixT s m a -> m a
 evalFixT m = fmap fst $ mfix $ \ ~(_, s) -> runWriterT $ runReaderT m s
 
-newtype SemiMap k v = SemiMap { getSemiMap :: Map k v }
+newtype MultiMap k a = MultiMap (Map k (Set a))
 
-instance (Ord k, Semigroup v) => Semigroup (SemiMap k v) where
-  x <> y = SemiMap $ Map.unionWith (<>) (coerce x) (coerce y)
+instance (Ord k, Ord v) => Semigroup (MultiMap k v) where
+  x <> y = MultiMap $ Map.unionWith (<>) (coerce x) (coerce y)
 
-instance (Ord k, Semigroup v) => Monoid (SemiMap k v) where
-  mempty = SemiMap mempty
+instance (Ord k, Ord v) => Monoid (MultiMap k v) where
+  mempty = MultiMap mempty
 
-type FreezeT r f m =
+lookupMany :: (Ord k, Ord a) => Set k -> MultiMap k a -> Set a
+lookupMany xs = fold . flip Map.restrictKeys xs . coerce
+
+fromSet :: Set k -> a -> MultiMap k a
+fromSet xs y = MultiMap $ Map.fromSet (const ys) xs
+  where
+    ys = Set.singleton y
+
+type FreezeT r t m =
   FixT
-  (SemiMap (NFA r f) (Set (DFA f)))
-  (StateT (Map (Set (NFA r f)) (DFA f)) (SupplyT Label m))
+  (MultiMap (NFA r t) (DFA t))
+  (StateT (Map (Set (NFA r t)) (DFA t)) (SupplyT Label m))
 
-evalFreezeT :: MonadFix m => FreezeT r f m a -> m a
+evalFreezeT :: MonadFix m => FreezeT r t m a -> m a
 evalFreezeT m = runSupplyT (evalStateT (evalFixT m) mempty)
 
-toDFA' :: ( State.Map f
-          , MonadFix m
-          , MonadRef r m
-          ) => Bool -> Set (NFA r f) -> FreezeT r f m (DFA f)
-toDFA' p = fix $ \ recur xs -> gets (Map.lookup xs) >>= \ case
+putDFA :: ( MonadState (Map (Set (NFA r t)) (DFA t)) m
+          , MonadWriter (MultiMap (NFA r t) (DFA t)) m
+          ) => Set (NFA r t) -> DFA t -> m ()
+putDFA xs y = modify (Map.insert xs y) >> tell (fromSet xs y)
+
+getDFAFlow :: ( MonadReader (MultiMap (NFA r t) (DFA t)) m
+              , MonadRef r m
+              ) => Set (NFA r t) -> m (Set (DFA t))
+getDFAFlow = foldMapM (\ x -> lookupMany <$> readRef x.flow <*> ask)
+
+fromNegNFA' :: ( State.Map t
+               , MonadFix m
+               , MonadRef r m
+               ) => Set (NFA r t) -> FreezeT r t m (DFA t)
+fromNegNFA' xs = gets (Map.lookup xs) >>= \ case
   Just y -> pure y
-  Nothing -> mfix $ \ y -> do
-    modify $ Map.insert xs y
-    tell $ coerce $ Map.fromSet (const (Set.singleton y)) xs
-    env <- coerce <$> ask
-    DFA <$>
-      supply <*>
-      undefined xs <*>
-      foldMapM (fmap (foldMap (flip (findWithDefault mempty) env)) . readRef . (.flow)) xs
+  Nothing -> mfix $ \ y ->
+    putDFA xs y >>
+    DFA <$> supply <*> getDFATrans xs <*> getDFAFlow xs
+  where
+    getDFATrans = recur <=< foldMapM' append State.empty transClosure
+    recur = State.traverse' fromPosNFA' fromNegNFA'
+    append = State.intersectionWith (<>)
 
-toDFA :: ( State.Map f
-         , MonadFix m
-         , MonadRef r m
-         ) => Bool -> NFA r f -> FreezeT r f m (DFA f)
-toDFA p = toDFA' p <=< epsilonClosure
+fromPosNFA' :: ( State.Map t
+               , MonadFix m
+               , MonadRef r m
+               ) => Set (NFA r t) -> FreezeT r t m (DFA t)
+fromPosNFA' xs = gets (Map.lookup xs) >>= \ case
+  Just y -> pure y
+  Nothing -> mfix $ \ y ->
+    putDFA xs y >>
+    DFA <$> supply <*> getDFATrans xs <*> getDFAFlow xs
+  where
+    getDFATrans = recur <=< foldMapM' append State.empty transClosure
+    recur = State.traverse' fromNegNFA' fromPosNFA'
+    append = State.unionWith (<>)
 
-type ThawT r f = StateT (Map (DFA f) (NFA r f))
+fromNegNFA :: ( State.Map t
+              , MonadFix m
+              , MonadRef r m
+              ) => NFA r t -> FreezeT r t m (DFA t)
+fromNegNFA = fromNegNFA' <=< epsilonClosure
 
-evalThawT :: Monad m => ThawT r f m a -> m a
+fromPosNFA :: ( State.Map t
+              , MonadFix m
+              , MonadRef r m
+              ) => NFA r t -> FreezeT r t m (DFA t)
+fromPosNFA = fromPosNFA' <=< epsilonClosure
+
+type ThawT r t = StateT (Map (DFA t) (NFA r t))
+
+evalThawT :: Monad m => ThawT r t m a -> m a
 evalThawT m = evalStateT m mempty
 
-toNFA :: ( Traversable f
-         , MonadFix m
-         , MonadRef r m
-         , MonadSupply Label m
-         ) => DFA f -> ThawT r f m (NFA r f)
-toNFA = fix $ \ recur x -> gets (Map.lookup x) >>= \ case
-  Just x -> pure x
-  Nothing -> mfix $ \ y -> do
-    modify $ Map.insert x y
-    NFA <$>
-      supply <*>
-      (newRef <=< traverse (fmap Set.singleton . recur)) x.trans <*>
-      newRef mempty <*>
-      (newRef <=< Set.traverse recur) x.flow
+fromDFA :: ( Traversable t
+           , MonadFix m
+           , MonadRef r m
+           , MonadSupply Label m
+           ) => DFA t -> ThawT r t m (NFA r t)
+fromDFA = fix $ \ recur x -> gets (Map.lookup x) >>= \ case
+  Just y -> pure y
+  Nothing -> mfix $ \ y ->
+    modify (Map.insert x y) >>
+    NFA <$> supply <*> getNFATrans x <*> newRef mempty <*> getNFAFlow x
+    where
+      getNFATrans = newRef <=< traverse (fmap Set.singleton . recur) . (.trans)
+      getNFAFlow = newRef <=< Set.traverse recur . (.flow)

@@ -7,6 +7,7 @@ module Head
   , HeadMap
   ) where
 
+import Data.Bitraversable
 import Data.Map qualified as Ord (Map)
 import Data.Map qualified as Ord.Map
 import Data.Maybe (catMaybes)
@@ -18,7 +19,7 @@ data Head a
   | Ref a a
   | Fn a a
   | Struct (Ord.Map String a)
-  | Union (Ord.Map String a) deriving Show
+  | Union (Ord.Map String a) deriving (Functor, Foldable, Traversable, Show)
 
 data HeadMap a
   = HeadMap
@@ -66,6 +67,12 @@ instance Map HeadMap where
     Fn x y -> empty { fn = Just (x, y) }
     Struct xs -> empty { struct = Just xs }
     Union xs -> empty { union = Just xs }
+  traverse' f g HeadMap {..} =
+    HeadMap void <$>
+    traverse (bitraverse f g) ref <*>
+    traverse (bitraverse f g) fn <*>
+    traverse (traverse g) struct <*>
+    traverse (traverse g) union
   unionWith f = \ x y ->
     HeadMap
     { void = x.void || y.void
