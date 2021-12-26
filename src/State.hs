@@ -13,4 +13,4 @@ class Traversable t => Map t where
   bizipWithM_ :: Applicative f => (a -> b -> f c) -> (a -> b -> f c) -> t a -> t b -> f ()
   unionWith :: (a -> a -> a) -> t a -> t a -> t a
   intersectionWith :: (a -> a -> a) -> t a -> t a -> t a
-  isSubmapOf :: t a -> t b -> Bool
+  isSubmapOf :: t a -> t a -> Bool

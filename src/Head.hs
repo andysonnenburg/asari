@@ -7,11 +7,13 @@ module Head
   , HeadMap
   ) where
 
+import Control.Monad
 import Data.Bitraversable qualified as Bitraversable
-import Data.Map qualified as Ord (Map)
-import Data.Map qualified as Ord.Map
+import Data.Functor qualified as Functor
 import Data.Maybe (catMaybes)
 
+import Map.Lazy qualified as Ord (Map)
+import Map.Lazy qualified as Ord.Map
 import State
 
 data Head a
@@ -73,6 +75,19 @@ instance Map HeadMap where
     traverse (Bitraversable.bitraverse f g) fn <*>
     traverse (traverse g) struct <*>
     traverse (traverse g) union
+  bizipWithM_ f g x y =
+    (case (x.ref, y.ref) of
+       (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> f x' y'
+       _ -> pure ()) *>
+    (case (x.fn, y.fn) of
+       (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> f x' y'
+       _ -> pure ()) *>
+    (case (x.struct, y.struct) of
+       (Just x, Just y) -> Ord.Map.zipWithM_ f x y
+       _ -> pure ()) *>
+    (case (x.union, y.union) of
+       (Just x, Just y) -> Ord.Map.zipWithM_ f x y
+       _ -> pure ())    
   unionWith f = \ x y ->
     HeadMap
     { void = x.void || y.void
@@ -89,3 +104,21 @@ instance Map HeadMap where
     , struct = unionMaybe (Ord.Map.unionWith f) x.struct y.struct
     , union = unionMaybe (Ord.Map.intersectionWith f) x.union y.union
     }
+  x `isSubmapOf` y =
+    flip allKeys x $ \ x ->
+    flip allKeys y $ \ y ->
+    case (x, y) of
+      (Void, Void) -> True
+      (Ref {}, Ref {}) -> True
+      (Fn {}, Fn {}) -> True
+      (Struct x, Struct y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) x y
+      (Union x, Union y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) y x
+      _ -> False
+
+allKeys :: (Head a -> Bool) -> HeadMap a -> Bool
+allKeys f HeadMap {..} =
+  (if void then True else f Void) &&
+  all (f . uncurry Ref) ref &&
+  all (f . uncurry Fn) fn &&
+  all (f . Struct) struct &&
+  all (f . Union) union

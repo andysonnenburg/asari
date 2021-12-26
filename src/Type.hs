@@ -3,10 +3,9 @@ module Type
   , MType
   ) where
 
-import Data.Map (Map)
-
 import FA
 import Head
+import Map.Lazy (Map)
 import Name
 
 type Type = (Map Name (DFA HeadMap), DFA HeadMap)

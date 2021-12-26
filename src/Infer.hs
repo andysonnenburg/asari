@@ -2,9 +2,8 @@ module Infer
   ( infer
   ) where
 
-import Data.Map (Map)
-
 import Exp
+import Map.Lazy (Map)
 import Name
 import Type
 import Unify
