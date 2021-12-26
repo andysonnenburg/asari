@@ -14,22 +14,23 @@ import Data.Maybe (catMaybes)
 
 import Map.Lazy qualified as Ord (Map)
 import Map.Lazy qualified as Ord.Map
+import Name
 import State
 
 data Head a
   = Void
   | Ref a a
   | Fn a a
-  | Struct (Ord.Map String a)
-  | Union (Ord.Map String a) deriving (Functor, Foldable, Traversable, Show)
+  | Struct (Ord.Map Name a)
+  | Union (Ord.Map Name a) deriving (Functor, Foldable, Traversable, Show)
 
 data HeadMap a
   = HeadMap
     { void :: Bool
     , ref :: Maybe (a, a)
     , fn :: Maybe (a, a)
-    , struct :: Maybe (Ord.Map String a)
-    , union :: Maybe (Ord.Map String a)
+    , struct :: Maybe (Ord.Map Name a)
+    , union :: Maybe (Ord.Map Name a)
     } deriving (Functor, Foldable, Traversable)
 
 instance Show a => Show (HeadMap a) where
