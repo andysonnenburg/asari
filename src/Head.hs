@@ -7,7 +7,7 @@ module Head
   , HeadMap
   ) where
 
-import Data.Bitraversable
+import Data.Bitraversable qualified as Bitraversable
 import Data.Map qualified as Ord (Map)
 import Data.Map qualified as Ord.Map
 import Data.Maybe (catMaybes)
@@ -48,6 +48,9 @@ unionMaybe f = curry $ \ case
   (Nothing, y@Just {}) -> y
   (Just x, Just y) -> Just $ f x y
 
+unionTuple :: (a -> a -> b) -> (a, a) -> (a, a) -> (b, b)
+unionTuple f = \ (x, y) (x', y') -> (f x x', f y y')
+
 instance Map HeadMap where
   type Key HeadMap = Head
   empty =
@@ -66,23 +69,23 @@ instance Map HeadMap where
     Union xs -> empty { union = Just xs }
   bitraverse f g HeadMap {..} =
     HeadMap void <$>
-    traverse (bitraverse f g) ref <*>
-    traverse (bitraverse f g) fn <*>
+    traverse (Bitraversable.bitraverse f g) ref <*>
+    traverse (Bitraversable.bitraverse f g) fn <*>
     traverse (traverse g) struct <*>
     traverse (traverse g) union
   unionWith f = \ x y ->
     HeadMap
     { void = x.void || y.void
-    , ref = unionMaybe (bitraverse f f) x.ref y.ref
-    , fn = unionMaybe (bitraverse f f) x.fn y.fn
+    , ref = unionMaybe (unionTuple f) x.ref y.ref
+    , fn = unionMaybe (unionTuple f) x.fn y.fn
     , struct = unionMaybe (Ord.Map.intersectionWith f) x.struct y.struct
     , union = unionMaybe (Ord.Map.unionWith f) x.union y.union
     }
   intersectionWith f = \ x y ->
     HeadMap
     { void = x.void || y.void
-    , ref = unionMaybe (bitraverse f f) x.ref y.ref
-    , fn = unionMaybe (bitraverse f f) x.fn y.fn
+    , ref = unionMaybe (unionTuple f) x.ref y.ref
+    , fn = unionMaybe (unionTuple f) x.fn y.fn
     , struct = unionMaybe (Ord.Map.unionWith f) x.struct y.struct
     , union = unionMaybe (Ord.Map.intersectionWith f) x.union y.union
     }
