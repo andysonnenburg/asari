@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 module Map.Lazy
   ( module Data.Map.Lazy
   , zipWithM_

@@ -2,7 +2,6 @@ module Exp
   ( Exp (..)
   ) where
 
-import Map.Lazy (Map)
 import Name
 
 data Exp

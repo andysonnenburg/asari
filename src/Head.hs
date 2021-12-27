@@ -1,13 +1,16 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE DeriveTraversable #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 module Head
   ( Head (..)
   , HeadMap
   ) where
 
-import Control.Monad
 import Data.Bitraversable qualified as Bitraversable
 import Data.Functor qualified as Functor
 import Data.Maybe (catMaybes)
@@ -78,10 +81,10 @@ instance Map HeadMap where
     traverse (traverse g) union
   bizipWithM_ f g x y =
     (case (x.ref, y.ref) of
-       (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> f x' y'
+       (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> g x' y'
        _ -> pure ()) *>
     (case (x.fn, y.fn) of
-       (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> f x' y'
+       (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> g x' y'
        _ -> pure ()) *>
     (case (x.struct, y.struct) of
        (Just x, Just y) -> Ord.Map.zipWithM_ f x y
