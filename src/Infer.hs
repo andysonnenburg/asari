@@ -2,7 +2,9 @@
 {-# LANGUAGE RecursiveDo #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Infer
   ( infer
   , infer'
@@ -12,7 +14,7 @@ import Control.Monad.Error.Class
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.ST
-import Data.Foldable
+import Data.Coerce
 import Data.Map.Merge.Lazy qualified as Map
 
 import Exp as Exp
@@ -53,14 +55,14 @@ infer = \ case
     (env_e2, t_e2) <- infer e2
     t <- fresh State.empty
     unify t_e1 =<< freshFn t_e2 t
-    (,) <$> union env_e1 env_e2 <*> pure t
+    (, t) <$> union env_e1 env_e2
   Let x e1 e2 -> do
     t_e1 <- freeze =<< infer e1
     local (Map.insert x t_e1) $ infer e2
   Exp.Struct xs -> do
-    (env, xs) <- build xs $ \ env (i, e) -> do
+    (env, xs) <- forAccumLM mempty xs $ \ env (i, e) -> do
       (env_e, t_e) <- infer e
-      (,) <$> union env env_e <*> pure (i, Set.singleton t_e)
+      (, (i, Set.singleton t_e)) <$> union env env_e
     (env,) <$> fresh (State.singleton (Head.Struct (Map.fromList xs)))
   Field e i -> mdo
     (env_e, t_e) <- infer e
@@ -72,11 +74,20 @@ infer = \ case
     (env_e, t_e) <- infer e
     (env_e,) <$> freshUnion i t_e
 
-build :: ( Traversable t
-         , Applicative f
-         , Monoid b
-         ) => t a -> (b -> a -> f (b, c)) -> f (b, t c)
-build xs f = undefined
+newtype StateL s f a = StateL { runStateL :: s -> f (s, a) }
+
+instance Functor f => Functor (StateL s f) where
+  fmap f m = StateL $ fmap (fmap f) . coerce m
+
+instance Monad f => Applicative (StateL s f) where
+  pure x = StateL $ pure . (, x)
+  f <*> x = StateL $ \ s -> runStateL f s >>= \ (s, f) -> fmap f <$> runStateL x s
+
+forAccumLM :: forall t f a b c .
+              ( Traversable t
+              , Monad f
+              ) => b -> t a -> (b -> a -> f (b, c)) -> f (b, t c)
+forAccumLM s t f = coerce (traverse @t @(StateL b f) @a @c) (flip f) t s
 
 infer' :: Exp -> Maybe Type
 infer' e =
