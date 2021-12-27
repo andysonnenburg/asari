@@ -9,5 +9,6 @@ data Exp
   | Abs Name Exp
   | App Exp Exp
   | Let Name Exp Exp
-  | Select Exp Name
-  | Label Name Exp deriving Show
+  | Struct [(Name, Exp)]
+  | Field Exp Name
+  | Case Name Exp deriving Show

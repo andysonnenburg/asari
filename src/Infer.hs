@@ -12,11 +12,12 @@ import Control.Monad.Error.Class
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.ST
+import Data.Foldable
 import Data.Map.Merge.Lazy qualified as Map
 
-import Exp
+import Exp as Exp
 import FA
-import Head
+import Head as Head
 import Map.Lazy (Map)
 import Map.Lazy qualified as Map
 import Name
@@ -42,9 +43,8 @@ infer = \ case
       t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
       pure (Map.singleton x t_neg, t_pos)
   Abs x e -> infer e >>= \ (env, t_e) -> case Map.lookup x env of
-    Just t_x -> do
-      let env = Map.delete x env
-      (env,) <$> freshFn t_x t_e
+    Just t_x ->
+      (Map.delete x env,) <$> freshFn t_x t_e
     Nothing -> do
       t_x <- fresh State.empty
       (env,) <$> freshFn t_x t_e
@@ -57,15 +57,26 @@ infer = \ case
   Let x e1 e2 -> do
     t_e1 <- freeze =<< infer e1
     local (Map.insert x t_e1) $ infer e2
-  Select e i -> mdo
+  Exp.Struct xs -> do
+    (env, xs) <- build xs $ \ env (i, e) -> do
+      (env_e, t_e) <- infer e
+      (,) <$> union env env_e <*> pure (i, Set.singleton t_e)
+    (env,) <$> fresh (State.singleton (Head.Struct (Map.fromList xs)))
+  Field e i -> mdo
     (env_e, t_e) <- infer e
     t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
     t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
     unify t_e =<< freshStruct i t_neg
     pure (env_e, t_pos)
-  Label i e -> do
+  Case i e -> do
     (env_e, t_e) <- infer e
     (env_e,) <$> freshUnion i t_e
+
+build :: ( Traversable t
+         , Applicative f
+         , Monoid b
+         ) => t a -> (b -> a -> f (b, c)) -> f (b, t c)
+build xs f = undefined
 
 infer' :: Exp -> Maybe Type
 infer' e =
@@ -97,7 +108,7 @@ freshStruct :: ( MonadRef r m
                , MonadSupply Label m
                ) => Name -> NFA r HeadMap -> m (NFA r HeadMap)
 freshStruct i x =
-  fresh (State.singleton (Struct (Map.singleton i (Set.singleton x))))
+  fresh (State.singleton (Head.Struct (Map.singleton i (Set.singleton x))))
 
 freshUnion :: ( MonadRef r m
               , MonadSupply Label m
