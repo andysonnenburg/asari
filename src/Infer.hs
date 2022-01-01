@@ -15,6 +15,7 @@ import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.ST
 import Data.Coerce
+import Data.Foldable
 import Data.Map.Merge.Lazy qualified as Map
 
 import Exp as Exp
@@ -70,15 +71,41 @@ infer = \ case
     t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
     unify t_e =<< freshStruct i t_neg
     pure (env_e, t_pos)
-  Switch e@(Var i) xs (Just x) -> do
-    (env_e, t_e) <- infer e
-    (env_xs, t_xs) <- rotate foldlM undefined xs $ \ z x ->
-      undefined
-    (env_x, t_x) <- infer x
-    (,) <$> union env_xs (Map.delete i env_x) <*> join t_xs t_x
+  Switch e@(Var i) x xs -> do
+    (env_e, t_e_pos) <- infer e
+    (env_x, t_x, t_x_i) <- uncurry inferCase x
+    let z = (env_x, t_x, [(i, t_x_i)])
+    (env_xs, t_xs, t_xs_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
+      (env_e, t_e, t_e_i) <- inferCase i e
+      (,, (i, t_e_i):z) <$> union env_xs env_e <*> append t_xs t_e
+    t_e_neg <- fresh (State.singleton (Union (Map.fromList (reverse t_xs_i))))
+    unify t_e_pos t_e_neg
+    (, t_xs) <$> union env_e env_xs
   Case i e -> do
     (env_e, t_e) <- infer e
     (env_e,) <$> freshUnion i t_e
+
+
+inferCase :: ( MonadError () m
+             , MonadFix m
+             , MonadReader (Map Name Type) m
+             , MonadRef r m
+             , MonadSupply Label m
+             ) => Name -> Exp -> m (Map Name (NFA r HeadMap), NFA r HeadMap, Set (NFA r HeadMap))
+inferCase i e = do
+  (env_e, t_e) <- infer e
+  case Map.lookup i env_e of
+    Just t_i_neg -> mdo
+      t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
+      t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
+      let ts_neg = Set.singleton t_neg
+      t_i_pos <- fresh (State.singleton (Union (Map.singleton i ts_neg)))
+      unify t_i_pos t_i_neg
+      pure (Map.delete i env_e, t_e, ts_neg)
+    Nothing -> do
+      ts_neg <- Set.singleton <$> fresh State.empty
+      t_i_neg <- fresh (State.singleton (Union (Map.singleton i ts_neg)))
+      pure (env_e, t_e, ts_neg)
 
 newtype StateL s f a = StateL { runStateL :: s -> f (s, a) }
 
@@ -155,5 +182,5 @@ newNFA :: ( MonadRef r m
 newNFA trans epsilonTrans flow =
   NFA <$> supply <*> newRef trans <*> newRef epsilonTrans <*> newRef flow
 
-rotate :: (a -> b -> c -> d) -> c -> a -> b -> d
-rotate f c a b = f a b c
+rotate :: (a -> b -> c -> d) -> b -> c -> a -> d
+rotate f b c a = f a b c

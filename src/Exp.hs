@@ -11,4 +11,5 @@ data Exp
   | Let Name Exp Exp
   | Struct [(Name, Exp)]
   | Field Exp Name
+  | Switch Exp (Name, Exp) [(Name, Exp)]
   | Case Name Exp deriving Show
