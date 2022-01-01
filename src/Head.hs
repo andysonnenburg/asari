@@ -45,7 +45,7 @@ toList HeadMap {..} = catMaybes
   : (uncurry Ref <$> ref)
   : (uncurry Fn <$> fn)
   : (Struct <$> struct)
-  : [Union <$> union]  
+  : [Union <$> union]
 
 unionMaybe :: (a -> a -> a) -> Maybe a -> Maybe a -> Maybe a
 unionMaybe f = curry $ \ case
@@ -91,7 +91,7 @@ instance Map HeadMap where
        _ -> pure ()) *>
     (case (x.union, y.union) of
        (Just x, Just y) -> Ord.Map.zipWithM_ f x y
-       _ -> pure ())    
+       _ -> pure ())
   unionWith f = \ x y ->
     HeadMap
     { void = x.void || y.void

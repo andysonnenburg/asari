@@ -70,6 +70,12 @@ infer = \ case
     t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
     unify t_e =<< freshStruct i t_neg
     pure (env_e, t_pos)
+  Switch e@(Var i) xs (Just x) -> do
+    (env_e, t_e) <- infer e
+    (env_xs, t_xs) <- rotate foldlM undefined xs $ \ z x ->
+      undefined
+    (env_x, t_x) <- infer x
+    (,) <$> union env_xs (Map.delete i env_x) <*> join t_xs t_x
   Case i e -> do
     (env_e, t_e) <- infer e
     (env_e,) <$> freshUnion i t_e
@@ -100,8 +106,13 @@ union :: ( State.Map t
          ) => Map Name (NFA r t) -> Map Name (NFA r t) -> m (Map Name (NFA r t))
 union =
   Map.mergeA Map.preserveMissing Map.preserveMissing $
-  Map.zipWithAMatched $ \ _ x y ->
-  newNFA State.empty (Set.fromList [x, y]) mempty
+  Map.zipWithAMatched $ const append
+
+append :: ( State.Map t
+          , MonadRef r m
+          , MonadSupply Label m
+          ) => NFA r t -> NFA r t -> m (NFA r t)
+append x y = newNFA State.empty (Set.fromList [x, y]) mempty
 
 fresh :: ( State.Map t
          , MonadRef r m
@@ -143,3 +154,6 @@ newNFA :: ( MonadRef r m
           ) => t (Set (NFA r t)) -> Set (NFA r t) -> Set (NFA r t) -> m (NFA r t)
 newNFA trans epsilonTrans flow =
   NFA <$> supply <*> newRef trans <*> newRef epsilonTrans <*> newRef flow
+
+rotate :: (a -> b -> c -> d) -> c -> a -> b -> d
+rotate f c a b = f a b c
