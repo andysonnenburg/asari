@@ -4,7 +4,7 @@ module Main
   ) where
 
 import Data.ByteString qualified as ByteString
-import Lex (Lex, runLex)
+import Lex
 import Infer
 import Parse
 

@@ -32,27 +32,24 @@ import Token
   case { Token.Case }
   name { Name $$ }
 
-%nonassoc '{' '}' '(' ')' fn val var switch case name
-%left '.'
-%right '='
-%left ','
-%left ';'
-%left App
-%left Let
-%left Seq
-
 %%
 
 Void : { Void }
-     | Exp { $1 }
-     | Exp ';' { Seq $1 Void }
+     | Let { $1 }
+
+Let : Seq { $1 }
+    | val name '=' App ';' Let { Let $2 $4 $6 }
+
+Seq : App { $1 }
+    | Seq ';' { Seq $1 Void }
+    | Seq ';' App { Seq $1 $3 }
+
+App : Exp { $1 }
+    | App Exp { App $1 $2 }
 
 Exp : name { Exp.Var $1 }
     | fn name '{' Void '}' { Abs $2 $4 }
     | fn '(' name ')' '{' Void '}' { Abs $3 $6 }
-    | Exp Exp %prec App { App $1 $2 }
-    | val name '=' Exp ';' Exp %prec Let { Let $2 $4 $6 }
-    | Exp ';' Exp %prec Seq { Seq $1 $3 }
 
 {
 lexer :: (Token -> Lex a) -> Lex a
