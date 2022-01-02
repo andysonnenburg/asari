@@ -2,9 +2,10 @@ module Error
   ( Error (..)
   ) where
 
+import Head
 import Token
 
 data Error
   = LexError
   | ParseError Token
-  | UnifyError deriving Show
+  | UnifyError (HeadMap ()) (HeadMap ()) deriving Show

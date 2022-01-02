@@ -6,34 +6,36 @@ module Unify
   ) where
 
 import Control.Monad
-import Control.Monad.Error.Class
+import Control.Monad.Error.Class (MonadError, throwError)
 import Control.Monad.Fix
 import Control.Monad.State.Strict
 import Data.Bool
 import Data.Foldable
 
+import Error
 import FA
+import Head
 import Ref
 import Set (Set)
 import Set qualified
 import State qualified
 
-unify :: ( State.Map t
-         , MonadError () m
+unify :: ( MonadError Error m
          , MonadFix m
          , MonadRef r m
-         ) => NFA r t -> NFA r t -> m ()
+         ) => NFA r HeadMap -> NFA r HeadMap -> m ()
 unify x y = evalStateT (unify' x y) mempty
 
-unify' :: ( State.Map t
-          , MonadError () m
+unify' :: ( MonadError Error m
           , MonadFix m
           , MonadRef r m
-          , MonadState (Set (NFA r t, NFA r t)) m
-          ) => NFA r t -> NFA r t -> m ()
+          , MonadState (Set (NFA r HeadMap, NFA r HeadMap)) m
+          ) => NFA r HeadMap -> NFA r HeadMap -> m ()
 unify' = fix $ \ recur x y -> unlessM (gets (Set.member (x, y))) $ do
   modify $ Set.insert (x, y)
-  unlessM (State.isSubmapOf <$> readRef y.trans <*> readRef x.trans) $ throwError ()
+  unlessM (State.isSubmapOf <$> readRef y.trans <*> readRef x.trans) $ do
+    e <- UnifyError <$> (void <$> readRef y.trans) <*> (void <$> readRef x.trans)
+    throwError e
   readRef y.flow >>= traverse_ (flip mergePos x)
   readRef x.flow >>= traverse_ (flip mergeNeg y)
   let f xs ys = sequence $ recur <$> toList xs <*> toList ys

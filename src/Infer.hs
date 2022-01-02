@@ -10,7 +10,6 @@ module Infer
   , infer'
   ) where
 
-import Control.Monad.Error.Class
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.ST
@@ -18,6 +17,7 @@ import Data.Coerce
 import Data.Foldable
 import Data.Map.Merge.Lazy qualified as Map
 
+import Error
 import Exp as Exp
 import FA
 import Head as Head
@@ -32,7 +32,7 @@ import Supply
 import Type
 import Unify
 
-infer :: ( MonadError () m
+infer :: ( MonadError Error m
          , MonadFix m
          , MonadReader (Map Name Type) m
          , MonadRef r m
@@ -78,7 +78,7 @@ infer = \ case
     (env_xs, t_xs, t_xs_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e, t_e_i) <- inferCase i e
       (,, (i, t_e_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    t_e_neg <- fresh (State.singleton (Union (Map.fromList (reverse t_xs_i))))
+    t_e_neg <- fresh (State.singleton (Union (Map.fromList  t_xs_i)))
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
   Case i e -> do
@@ -86,7 +86,7 @@ infer = \ case
     (env_e,) <$> freshUnion i t_e
 
 
-inferCase :: ( MonadError () m
+inferCase :: ( MonadError Error m
              , MonadFix m
              , MonadReader (Map Name Type) m
              , MonadRef r m
@@ -98,14 +98,12 @@ inferCase i e = do
     Just t_i_neg -> mdo
       t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
       t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
-      let ts_neg = Set.singleton t_neg
-      t_i_pos <- fresh (State.singleton (Union (Map.singleton i ts_neg)))
+      t_i_pos <- freshUnion i t_pos
       unify t_i_pos t_i_neg
-      pure (Map.delete i env_e, t_e, ts_neg)
+      pure (Map.delete i env_e, t_e, Set.singleton t_neg)
     Nothing -> do
-      ts_neg <- Set.singleton <$> fresh State.empty
-      t_i_neg <- fresh (State.singleton (Union (Map.singleton i ts_neg)))
-      pure (env_e, t_e, ts_neg)
+      t_neg <- fresh State.empty
+      pure (env_e, t_e, Set.singleton t_neg)
 
 newtype StateL s f a = StateL { runStateL :: s -> f (s, a) }
 
@@ -122,10 +120,8 @@ forAccumLM :: forall t f a b c .
               ) => b -> t a -> (b -> a -> f (b, c)) -> f (b, t c)
 forAccumLM s t f = coerce (traverse @t @(StateL b f) @a @c) (flip f) t s
 
-infer' :: Exp -> Maybe Type
-infer' e =
-  either (const Nothing) Just $
-  runST (runSupplyT (runReaderT (runExceptT (infer e >>= freeze)) mempty))
+infer' :: Exp -> Either Error Type
+infer' e = runST (runSupplyT (runReaderT (runExceptT (infer e >>= freeze)) mempty))
 
 union :: ( State.Map t
          , MonadRef r m

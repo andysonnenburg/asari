@@ -121,7 +121,7 @@ instance Map HeadMap where
 
 allKeys :: (Head a -> Bool) -> HeadMap a -> Bool
 allKeys f HeadMap {..} =
-  (if void then True else f Void) &&
+  (if void then f Void else True) &&
   all (f . uncurry Ref) ref &&
   all (f . uncurry Fn) fn &&
   all (f . Struct) struct &&
