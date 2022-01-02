@@ -1,4 +1,7 @@
-module Name (Name) where
+module Name
+  ( Name
+  ) where
 
-type Name = String
+import Data.Text (Text)
 
+type Name = Text

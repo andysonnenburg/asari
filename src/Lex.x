@@ -1,13 +1,21 @@
 {
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ImportQualifiedPost #-}
-module Lex (Lex, lex) where
+{-# LANGUAGE OverloadedRecordDot #-}
+module Lex
+  ( Lex
+  , runLex
+  , getToken
+  , throwError
+  ) where
 
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
-import Data.Int
+import Data.Function
+import Data.Text.Encoding qualified as Text
 import Data.Word
 
+import Error
 import Token
 }
 
@@ -23,6 +31,7 @@ $alpha = [\_a-zA-Z]
   "." { const Period }
   "," { const Comma }
   ";" { const Semicolon }
+  "=" { const Equals }
   fn { const Fn }
   val { const Val }
   var { const Var }
@@ -31,10 +40,47 @@ $alpha = [\_a-zA-Z]
   $alpha [$alpha $digit]* { \ s -> Name s }
 
 {
-data AlexInput = AlexInput { alexStr :: !ByteString, alexBytePos :: {-# UNPACK #-} !Int64 }
+runLex :: Lex a -> ByteString -> Either Error a
+runLex m input = case getLex m AlexInput { pos = 0, .. } of
+  Left e -> Left e
+  Right (_, x) -> Right x
+
+newtype Lex a = Lex { getLex :: AlexInput -> Either Error (AlexInput, a) }
+
+instance Functor Lex where
+  fmap f m = Lex $ \ s -> case getLex m s of
+    Left e -> Left e
+    Right (s, x) -> Right (s, f x)
+
+instance Applicative Lex where
+  pure x = Lex $ \ s -> Right (s, x)
+  f <*> x = Lex $ \ s -> case getLex f s of
+    Left e -> Left e
+    Right (s, f) -> case getLex x s of
+      Left e -> Left e
+      Right (s, x) -> Right (s, f x)
+
+instance Monad Lex where
+  x >>= f = Lex $ \ s -> case getLex x s of
+    Left e -> Left e
+    Right (s, x) -> getLex (f x) s
+
+getToken :: Lex Token
+getToken = Lex $ fix $ \ recur s -> case alexScan s 0 of
+  AlexEOF -> Right (s, EOF)
+  AlexError _ -> Left LexError
+  AlexSkip s _ -> recur s
+  AlexToken s' _ f ->
+    let n = s'.pos - s.pos
+    in Right (s', f (Text.decodeUtf8 (ByteString.take n s.input)))
+
+throwError :: Token -> Lex a
+throwError = Lex . const . Left . ParseError
+
+data AlexInput = AlexInput { input :: !ByteString, pos :: {-# UNPACK #-} !Int }
 
 alexGetByte :: AlexInput -> Maybe (Word8, AlexInput)
-alexGetByte AlexInput {..} = case ByteString.uncons alexStr of
+alexGetByte AlexInput {..} = case ByteString.uncons input of
   Nothing -> Nothing
-  Just (x, xs) -> Just (x, AlexInput { alexStr = xs, alexBytePos = alexBytePos + 1 })
+  Just (x, input) -> Just (x, AlexInput { pos = pos + 1, .. })
 }

@@ -12,9 +12,11 @@ data Token
   | Period
   | Comma
   | Semicolon
+  | Equals
   | Fn
   | Val
   | Var
   | Switch
   | Case
   | Name Name
+  | EOF deriving Show
