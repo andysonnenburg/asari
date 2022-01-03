@@ -85,7 +85,6 @@ infer = \ case
     (env_e, t_e) <- infer e
     (env_e,) <$> freshUnion i t_e
 
-
 inferCase :: ( MonadError Error m
              , MonadFix m
              , MonadReader (Map Name Type) m

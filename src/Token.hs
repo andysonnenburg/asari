@@ -16,7 +16,7 @@ data Token
   | Fn
   | Val
   | Var
+  | Struct
   | Switch
-  | Case
   | Name Name
   | EOF deriving Show

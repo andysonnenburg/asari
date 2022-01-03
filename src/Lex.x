@@ -35,8 +35,8 @@ $alpha = [\_a-zA-Z]
   fn { const Fn }
   val { const Val }
   var { const Var }
+  struct { const Struct }
   switch { const Switch }
-  case { const Case }
   $alpha [$alpha $digit]* { \ s -> Name s }
 
 {
