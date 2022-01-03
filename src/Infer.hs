@@ -60,6 +60,10 @@ infer = \ case
   Let x e1 e2 -> do
     t_e1 <- freeze =<< infer e1
     local (Map.insert x t_e1) $ infer e2
+  Seq e1 e2 -> do
+    (env_e1, _) <- infer e1
+    (env_e2, t_e2) <- infer e2
+    (, t_e2) <$> union env_e1 env_e2
   Exp.Struct xs -> do
     (env, xs) <- forAccumLM mempty xs $ \ env (i, e) -> do
       (env_e, t_e) <- infer e
@@ -71,35 +75,55 @@ infer = \ case
     t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
     unify t_e =<< freshStruct i t_neg
     pure (env_e, t_pos)
-  Switch e@(Var i) x xs -> do
+  Switch e@(Var v) x xs -> do
     (env_e, t_e_pos) <- infer e
-    (env_x, t_x, t_x_i) <- uncurry inferCase x
-    let z = (env_x, t_x, [(i, t_x_i)])
-    (env_xs, t_xs, t_xs_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
-      (env_e, t_e, t_e_i) <- inferCase i e
-      (,, (i, t_e_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    t_e_neg <- fresh (State.singleton (Union (Map.fromList  t_xs_i)))
+    z <- do
+      let (i, e) = x
+      (env_e, t_e, t_i) <- inferVarCase v i e
+      pure (env_e, t_e, [(i, t_i)])
+    (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
+      (env_e, t_e, t_i) <- inferVarCase v i e
+      (,, (i, t_i):z) <$> union env_xs env_e <*> append t_xs t_e
+    t_e_neg <- fresh (State.singleton (Union (Map.fromList t_i)))
+    unify t_e_pos t_e_neg
+    (, t_xs) <$> union env_e env_xs
+  Switch e x xs -> do
+    (env_e, t_e_pos) <- infer e
+    z <- do
+      let (i, e) = x
+      (env_e, t_e) <- infer e
+      t_i <- Set.singleton <$> fresh State.empty
+      pure (env_e, t_e, [(i, t_i)])
+    (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
+      (env_e, t_e) <- infer e
+      t_i <- Set.singleton <$> fresh State.empty
+      (,, (i, t_i):z) <$> union env_xs env_e <*> append t_xs t_e
+    t_e_neg <- fresh (State.singleton (Union (Map.fromList t_i)))
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
   Case i e -> do
     (env_e, t_e) <- infer e
     (env_e,) <$> freshUnion i t_e
+  Exp.Void ->
+    (mempty,) <$> fresh (State.singleton Head.Void)
 
-inferCase :: ( MonadError Error m
-             , MonadFix m
-             , MonadReader (Map Name Type) m
-             , MonadRef r m
-             , MonadSupply Label m
-             ) => Name -> Exp -> m (Map Name (NFA r HeadMap), NFA r HeadMap, Set (NFA r HeadMap))
-inferCase i e = do
+type Mono r = NFA r HeadMap
+
+inferVarCase :: ( MonadError Error m
+                , MonadFix m
+                , MonadReader (Map Name Type) m
+                , MonadRef r m
+                , MonadSupply Label m
+                ) => Name -> Name -> Exp -> m (Map Name (Mono r), Mono r, Set (Mono r))
+inferVarCase v i e = do
   (env_e, t_e) <- infer e
-  case Map.lookup i env_e of
+  case Map.lookup v env_e of
     Just t_i_neg -> mdo
       t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
       t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
       t_i_pos <- freshUnion i t_pos
       unify t_i_pos t_i_neg
-      pure (Map.delete i env_e, t_e, Set.singleton t_neg)
+      pure (Map.delete v env_e, t_e, Set.singleton t_neg)
     Nothing -> do
       t_neg <- fresh State.empty
       pure (env_e, t_e, Set.singleton t_neg)
