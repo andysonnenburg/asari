@@ -68,12 +68,12 @@ infer = \ case
     (env, xs) <- forAccumLM mempty xs $ \ env (i, e) -> do
       (env_e, t_e) <- infer e
       (, (i, Set.singleton t_e)) <$> union env env_e
-    (env,) <$> fresh (State.singleton (Head.Struct (Map.fromList xs)))
+    (env,) <$> freshStruct xs
   Field e i -> mdo
     (env_e, t_e) <- infer e
     t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
     t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
-    unify t_e =<< freshStruct i t_neg
+    unify t_e =<< freshField i t_neg
     pure (env_e, t_pos)
   Switch e@(Var v) x xs -> do
     (env_e, t_e_pos) <- infer e
@@ -84,7 +84,7 @@ infer = \ case
     (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e, t_i) <- inferVarCase v i e
       (,, (i, t_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    t_e_neg <- fresh (State.singleton (Union (Map.fromList t_i)))
+    t_e_neg <- freshUnion t_i
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
   Switch e x xs -> do
@@ -98,14 +98,14 @@ infer = \ case
       (env_e, t_e) <- infer e
       t_i <- Set.singleton <$> fresh State.empty
       (,, (i, t_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    t_e_neg <- fresh (State.singleton (Union (Map.fromList t_i)))
+    t_e_neg <- freshUnion t_i
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
   Case i e -> do
     (env_e, t_e) <- infer e
-    (env_e,) <$> freshUnion i t_e
+    (env_e,) <$> freshCase i t_e
   Exp.Void ->
-    (mempty,) <$> fresh (State.singleton Head.Void)
+    (mempty,) <$> freshVoid
 
 type Mono r = NFA r HeadMap
 
@@ -121,7 +121,7 @@ inferVarCase v i e = do
     Just t_i_neg -> mdo
       t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
       t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
-      t_i_pos <- freshUnion i t_pos
+      t_i_pos <- freshCase i t_pos
       unify t_i_pos t_i_neg
       pure (Map.delete v env_e, t_e, Set.singleton t_neg)
     Nothing -> do
@@ -168,21 +168,38 @@ fresh x = newNFA x mempty mempty
 
 freshFn :: ( MonadRef r m
            , MonadSupply Label m
-           ) => NFA r HeadMap -> NFA r HeadMap -> m (NFA r HeadMap)
+           ) => Mono r -> Mono r -> m (Mono r)
 freshFn x y =
   fresh (State.singleton (Fn (Set.singleton x) (Set.singleton y)))
 
 freshStruct :: ( MonadRef r m
                , MonadSupply Label m
-               ) => Name -> NFA r HeadMap -> m (NFA r HeadMap)
-freshStruct i x =
+               ) => [(Name, Set (Mono r))] -> m (Mono r)
+freshStruct =
+  fresh . State.singleton . Head.Struct . Map.fromList
+
+freshField :: ( MonadRef r m
+              , MonadSupply Label m
+              ) => Name -> Mono r -> m (Mono r)
+freshField i x =
   fresh (State.singleton (Head.Struct (Map.singleton i (Set.singleton x))))
 
 freshUnion :: ( MonadRef r m
               , MonadSupply Label m
-              ) => Name -> NFA r HeadMap -> m (NFA r HeadMap)
-freshUnion i x =
+              ) => [(Name, Set (Mono r))] -> m (Mono r)
+freshUnion =
+  fresh . State.singleton . Head.Union . Map.fromList
+
+freshCase :: ( MonadRef r m
+             , MonadSupply Label m
+             ) => Name -> Mono r -> m (Mono r)
+freshCase i x =
   fresh (State.singleton (Union (Map.singleton i (Set.singleton x))))
+
+freshVoid :: ( MonadRef r m
+             , MonadSupply Label m
+             ) => m (Mono r)
+freshVoid = fresh (State.singleton Head.Void)
 
 freeze :: ( MonadFix m
           , MonadRef r m

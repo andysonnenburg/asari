@@ -37,7 +37,7 @@ $alpha = [\_a-zA-Z]
   var { const Var }
   struct { const Struct }
   switch { const Switch }
-  $alpha [$alpha $digit]* { \ s -> Name s }
+  $alpha [$alpha $digit]* { Name }
 
 {
 runLex :: Lex a -> ByteString -> Either Error a

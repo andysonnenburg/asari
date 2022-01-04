@@ -11,6 +11,8 @@ module Head
   , HeadMap
   ) where
 
+import Data.Bifoldable
+import Data.Bifunctor
 import Data.Bitraversable qualified as Bitraversable
 import Data.Functor qualified as Functor
 import Data.Maybe (catMaybes)
@@ -25,7 +27,8 @@ data Head a
   | Ref a a
   | Fn a a
   | Struct (Ord.Map Name a)
-  | Union (Ord.Map Name a) deriving (Functor, Foldable, Traversable, Show)
+  | Union (Ord.Map Name a)
+  | All a deriving (Functor, Foldable, Traversable, Show)
 
 data HeadMap a
   = HeadMap
@@ -33,8 +36,42 @@ data HeadMap a
     , ref :: Maybe (a, a)
     , fn :: Maybe (a, a)
     , struct :: Maybe (Ord.Map Name a)
-    , union :: Maybe (Ord.Map Name a)
-    } deriving (Functor, Foldable, Traversable)
+    , union :: Maybe (Either (Ord.Map Name a) a)
+    }
+
+fmapTuple :: (a -> b) -> (a, a) -> (b, b)
+fmapTuple f = \ (x, y) -> (f x, f y)
+
+instance Functor HeadMap where
+  fmap f HeadMap {..} =
+    HeadMap
+    { ref = fmap (fmapTuple f) ref
+    , fn = fmap (fmapTuple f) fn
+    , struct = fmap (fmap f) struct
+    , union = fmap (bimap (fmap f) f) union
+    , ..
+    }
+
+foldMapTuple :: Semigroup m => (a -> m) -> (a, a) -> m
+foldMapTuple f = \ (x, y) -> f x <> f y
+
+instance Foldable HeadMap where
+  foldMap f HeadMap {..} =
+    foldMap (foldMapTuple f) ref <>
+    foldMap (foldMapTuple f) fn <>
+    foldMap (foldMap f) struct <>
+    foldMap (bifoldMap (foldMap f) f) union
+
+traverseTuple :: Applicative f => (a -> f b) -> (a, a) -> f (b, b)
+traverseTuple f = \ (x, y) -> (,) <$> f x <*> f y
+
+instance Traversable HeadMap where
+  traverse f HeadMap {..} =
+    HeadMap void <$>
+    traverse (traverseTuple f) ref <*>
+    traverse (traverseTuple f) fn <*>
+    traverse (traverse f) struct <*>
+    traverse (Bitraversable.bitraverse (traverse f) f) union
 
 instance Show a => Show (HeadMap a) where
   showsPrec prec = showParen (prec > 10) . (showString "fromList " .) . shows . toList
@@ -45,7 +82,7 @@ toList HeadMap {..} = catMaybes
   : (uncurry Ref <$> ref)
   : (uncurry Fn <$> fn)
   : (Struct <$> struct)
-  : [Union <$> union]
+  : [either Union All <$> union]
 
 unionMaybe :: (a -> a -> a) -> Maybe a -> Maybe a -> Maybe a
 unionMaybe f = curry $ \ case
@@ -72,13 +109,14 @@ instance Map HeadMap where
     Ref x y -> empty { ref = Just (x, y) }
     Fn x y -> empty { fn = Just (x, y) }
     Struct xs -> empty { struct = Just xs }
-    Union xs -> empty { union = Just xs }
+    Union xs -> empty { union = Just (Left xs) }
+    All x -> empty { union = Just (Right x) }
   bitraverse f g HeadMap {..} =
     HeadMap void <$>
     traverse (Bitraversable.bitraverse f g) ref <*>
     traverse (Bitraversable.bitraverse f g) fn <*>
     traverse (traverse g) struct <*>
-    traverse (traverse g) union
+    traverse (Bitraversable.bitraverse (traverse g) g) union
   bizipWithM_ f g x y =
     (case (x.ref, y.ref) of
        (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> g x' y'
@@ -90,7 +128,10 @@ instance Map HeadMap where
        (Just x, Just y) -> Ord.Map.zipWithM_ f x y
        _ -> pure ()) *>
     (case (x.union, y.union) of
-       (Just x, Just y) -> Ord.Map.zipWithM_ f x y
+       (Just (Left x), Just (Left y)) -> Ord.Map.zipWithM_ f x y
+       (Just (Left x), Just (Right y)) -> Functor.void $ traverse (flip f y) x
+       (Just (Right x), Just (Left y)) -> Functor.void $ traverse (f x) y
+       (Just (Right x), Just (Right y)) -> Functor.void $ g x y
        _ -> pure ())
   unionWith f = \ x y ->
     HeadMap
@@ -98,7 +139,11 @@ instance Map HeadMap where
     , ref = unionMaybe (unionTuple f) x.ref y.ref
     , fn = unionMaybe (unionTuple f) x.fn y.fn
     , struct = unionMaybe (Ord.Map.intersectionWith f) x.struct y.struct
-    , union = unionMaybe (Ord.Map.unionWith f) x.union y.union
+    , union = unionMaybe (curry $ \ case
+                             (Left x, Left y) -> Left $ Ord.Map.unionWith f x y
+                             (Left x, Right y) -> Right $ Ord.Map.foldl' f y x
+                             (Right x, Left y) -> Right $ Ord.Map.foldl' f x y
+                             (Right x, Right y) -> Right $ f x y) x.union y.union
     }
   intersectionWith f = \ x y ->
     HeadMap
@@ -106,7 +151,11 @@ instance Map HeadMap where
     , ref = unionMaybe (unionTuple f) x.ref y.ref
     , fn = unionMaybe (unionTuple f) x.fn y.fn
     , struct = unionMaybe (Ord.Map.unionWith f) x.struct y.struct
-    , union = unionMaybe (Ord.Map.intersectionWith f) x.union y.union
+    , union = unionMaybe (curry $ \ case
+                             (Left x, Left y) -> Left $ Ord.Map.intersectionWith f x y
+                             (Left x, Right y) -> Left $ flip f y <$> x
+                             (Right x, Left y) -> Left $ f x <$> y
+                             (Right x, Right y) -> Right $ f x y) x.union y.union
     }
   x `isSubmapOf` y =
     flip allKeys x $ \ x ->
@@ -117,6 +166,9 @@ instance Map HeadMap where
       (Fn {}, Fn {}) -> True
       (Struct x, Struct y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) x y
       (Union x, Union y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) y x
+      (Union _, All _) -> False
+      (All _, Union _) -> True
+      (All _, All _) -> True
       _ -> False
 
 allKeys :: (Head a -> Bool) -> HeadMap a -> Bool
@@ -125,4 +177,4 @@ allKeys f HeadMap {..} =
   all (f . uncurry Ref) ref &&
   all (f . uncurry Fn) fn &&
   all (f . Struct) struct &&
-  all (f . Union) union
+  all (f . either Union All) union
