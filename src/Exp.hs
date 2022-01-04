@@ -10,8 +10,7 @@ data Exp
   | App Exp Exp
   | Let Name Exp Exp
   | Seq Exp Exp
-  | Struct [(Name, Exp)]
+  | Struct (Maybe Name) [(Name, Exp)]
   | Field Exp Name
   | Switch Exp (Name, Exp) [(Name, Exp)]
-  | Case Name Exp
   | Void deriving Show

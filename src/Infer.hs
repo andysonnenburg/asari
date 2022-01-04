@@ -65,11 +65,11 @@ infer = \ case
     (env_e1, _) <- infer e1
     (env_e2, t_e2) <- infer e2
     (, t_e2) <$> union env_e1 env_e2
-  Exp.Struct xs -> do
+  Exp.Struct x xs -> do
     (env, xs) <- forAccumLM mempty xs $ \ env (i, e) -> do
       (env_e, t_e) <- infer e
       (, (i, Set.singleton t_e)) <$> union env env_e
-    (env,) <$> freshStruct xs
+    (env,) <$> freshStruct x xs
   Field e i -> mdo
     (env_e, t_e) <- infer e
     t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
@@ -102,9 +102,6 @@ infer = \ case
     t_e_neg <- freshUnion t_i
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
-  Case i e -> do
-    (env_e, t_e) <- infer e
-    (env_e,) <$> freshCase i t_e
   Exp.Void ->
     (mempty,) <$> freshVoid
 
@@ -175,9 +172,9 @@ freshFn x y =
 
 freshStruct :: ( MonadRef r m
                , MonadSupply Label m
-               ) => [(Name, Set (Mono r))] -> m (Mono r)
-freshStruct =
-  (freshAll =<<) . fresh . State.singleton . Head.Struct . Map.fromList
+               ) => Maybe Name -> [(Name, Set (Mono r))] -> m (Mono r)
+freshStruct x =
+  (maybe freshAll freshCase x =<<) . fresh . State.singleton . Head.Struct . Map.fromList
 
 freshField :: ( MonadRef r m
               , MonadSupply Label m

@@ -63,8 +63,11 @@ Exp : name { Exp.Var $1 }
     | fn name '{' Void '}' { Abs $2 $4 }
     | fn '(' name ')' '{' Void '}' { Abs $3 $6 }
     | '(' NonVoid ')' { $2 }
-    | struct '{' Labels '}' { Exp.Struct $3 }
+    | struct MaybeName '{' Labels '}' { Exp.Struct $2 $4 }
     | switch NonVoid '{' Label Labels '}' { Exp.Switch $2 $4 $5 }
+
+MaybeName : { Nothing }
+          | name { Just $1 }
 
 Labels : RevLabels { reverse $1 }
 

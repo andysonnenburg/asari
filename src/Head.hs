@@ -141,8 +141,8 @@ instance Map HeadMap where
     , struct = unionMaybe (Ord.Map.intersectionWith f) x.struct y.struct
     , union = unionMaybe (curry $ \ case
                              (Left x, Left y) -> Left $ Ord.Map.unionWith f x y
-                             (Left x, Right y) -> Left $ flip f y <$> x
-                             (Right x, Left y) -> Left $ f x <$> y
+                             (Left x, Right y) -> Right $ Ord.Map.foldl' f y x
+                             (Right x, Left y) -> Right $ Ord.Map.foldl' f x y
                              (Right x, Right y) -> Right $ f x y) x.union y.union
     }
   intersectionWith f = \ x y ->
@@ -166,7 +166,7 @@ instance Map HeadMap where
       (Fn {}, Fn {}) -> True
       (Struct x, Struct y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) x y
       (Union x, Union y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) y x
-      (Union _, All _) -> True
+      (Union _, All _) -> False
       (All _, Union _) -> True
       (All _, All _) -> True
       _ -> False
