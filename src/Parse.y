@@ -39,19 +39,16 @@ Void : { Void }
 
 NonVoid : NonVoidLet { $1 }
 
-Let : Seq { $1 }
+Let : Field { $1 }
+    | Field ';' { Seq $1 Void }
+    | Field ';' Let { Seq $1 $3 }
     | val name '=' App ';' Let { Let $2 $4 $6 }
     | fn name name '{' Void '}' Let { Let $2 (Abs $3 $5) $7 }
     | fn name '(' name ')' '{' Void '}' Let { Let $2 (Abs $4 $7) $9 }
 
-NonVoidLet : NonVoidSeq { $1 }
+NonVoidLet : Field { $1 }
+           | Field ';' NonVoidLet { Seq $1 $3 }
            | val name '=' App ';' NonVoidLet { Let $2 $4 $6 }
-
-Seq : NonVoidSeq { $1 }
-    | NonVoidSeq ';' { Seq $1 Void }
-
-NonVoidSeq : Field { $1 }
-           | NonVoidSeq ';' Field { Seq $1 $3 }
 
 Field : App { $1 }
       | Field '.' name { Field $1 $3 }
