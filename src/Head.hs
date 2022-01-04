@@ -125,12 +125,12 @@ instance Map HeadMap where
        (Just (x, x'), Just (y, y')) -> Functor.void $ f x y *> g x' y'
        _ -> pure ()) *>
     (case (x.struct, y.struct) of
-       (Just x, Just y) -> Ord.Map.zipWithM_ f x y
+       (Just x, Just y) -> Ord.Map.zipWithM_ g x y
        _ -> pure ()) *>
     (case (x.union, y.union) of
-       (Just (Left x), Just (Left y)) -> Ord.Map.zipWithM_ f x y
-       (Just (Left x), Just (Right y)) -> Functor.void $ traverse (flip f y) x
-       (Just (Right x), Just (Left y)) -> Functor.void $ traverse (f x) y
+       (Just (Left x), Just (Left y)) -> Ord.Map.zipWithM_ g x y
+       (Just (Left x), Just (Right y)) -> Functor.void $ traverse (flip g y) x
+       (Just (Right x), Just (Left y)) -> Functor.void $ traverse (g x) y
        (Just (Right x), Just (Right y)) -> Functor.void $ g x y
        _ -> pure ())
   unionWith f = \ x y ->
@@ -141,8 +141,8 @@ instance Map HeadMap where
     , struct = unionMaybe (Ord.Map.intersectionWith f) x.struct y.struct
     , union = unionMaybe (curry $ \ case
                              (Left x, Left y) -> Left $ Ord.Map.unionWith f x y
-                             (Left x, Right y) -> Right $ Ord.Map.foldl' f y x
-                             (Right x, Left y) -> Right $ Ord.Map.foldl' f x y
+                             (Left x, Right y) -> Left $ flip f y <$> x
+                             (Right x, Left y) -> Left $ f x <$> y
                              (Right x, Right y) -> Right $ f x y) x.union y.union
     }
   intersectionWith f = \ x y ->
@@ -166,7 +166,7 @@ instance Map HeadMap where
       (Fn {}, Fn {}) -> True
       (Struct x, Struct y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) x y
       (Union x, Union y) -> Ord.Map.isSubmapOfBy (\ _ _ -> True) y x
-      (Union _, All _) -> False
+      (Union _, All _) -> True
       (All _, Union _) -> True
       (All _, All _) -> True
       _ -> False

@@ -51,12 +51,13 @@ infer = \ case
     Nothing -> do
       t_x <- fresh State.empty
       (env,) <$> freshFn t_x t_e
-  App e1 e2 -> do
+  App e1 e2 -> mdo
     (env_e1, t_e1) <- infer e1
     (env_e2, t_e2) <- infer e2
-    t <- fresh State.empty
-    unify t_e1 =<< freshFn t_e2 t
-    (, t) <$> union env_e1 env_e2
+    t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
+    t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
+    unify t_e1 =<< freshFn t_e2 t_neg
+    (, t_pos) <$> union env_e1 env_e2
   Let x e1 e2 -> do
     t_e1 <- freeze =<< infer e1
     local (Map.insert x t_e1) $ infer e2

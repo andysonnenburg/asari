@@ -33,9 +33,8 @@ unify' :: ( MonadError Error m
           ) => NFA r HeadMap -> NFA r HeadMap -> m ()
 unify' = fix $ \ recur x y -> unlessM (gets (Set.member (x, y))) $ do
   modify $ Set.insert (x, y)
-  unlessM (State.isSubmapOf <$> readRef y.trans <*> readRef x.trans) $ do
-    e <- UnifyError <$> (void <$> readRef y.trans) <*> (void <$> readRef x.trans)
-    throwError e
+  unlessM (State.isSubmapOf <$> readRef y.trans <*> readRef x.trans) $
+    throwError =<< UnifyError <$> (void <$> readRef y.trans) <*> (void <$> readRef x.trans)
   readRef y.flow >>= traverse_ (flip mergePos x)
   readRef x.flow >>= traverse_ (flip mergeNeg y)
   let f xs ys = sequence $ recur <$> toList xs <*> toList ys
