@@ -170,19 +170,19 @@ freshFn :: ( MonadRef r m
            , MonadSupply Label m
            ) => Mono r -> Mono r -> m (Mono r)
 freshFn x y =
-  fresh (State.singleton (Fn (Set.singleton x) (Set.singleton y)))
+  freshAll =<< fresh (State.singleton (Fn (Set.singleton x) (Set.singleton y)))
 
 freshStruct :: ( MonadRef r m
                , MonadSupply Label m
                ) => [(Name, Set (Mono r))] -> m (Mono r)
 freshStruct =
-  fresh . State.singleton . Head.Struct . Map.fromList
+  (freshAll =<<) . fresh . State.singleton . Head.Struct . Map.fromList
 
 freshField :: ( MonadRef r m
               , MonadSupply Label m
               ) => Name -> Mono r -> m (Mono r)
 freshField i x =
-  fresh (State.singleton (Head.Struct (Map.singleton i (Set.singleton x))))
+  freshAll =<< fresh (State.singleton (Head.Struct (Map.singleton i (Set.singleton x))))
 
 freshUnion :: ( MonadRef r m
               , MonadSupply Label m
@@ -204,7 +204,8 @@ freshAll = fresh . State.singleton . All . Set.singleton
 freshVoid :: ( MonadRef r m
              , MonadSupply Label m
              ) => m (Mono r)
-freshVoid = fresh (State.singleton Head.Void)
+freshVoid =
+  freshAll =<< fresh (State.singleton Head.Void)
 
 freeze :: ( MonadFix m
           , MonadRef r m
