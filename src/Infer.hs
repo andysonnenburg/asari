@@ -196,6 +196,11 @@ freshCase :: ( MonadRef r m
 freshCase i x =
   fresh (State.singleton (Union (Map.singleton i (Set.singleton x))))
 
+freshAll :: ( MonadRef r m
+            , MonadSupply Label m
+            ) => Mono r -> m (Mono r)
+freshAll = fresh . State.singleton . All . Set.singleton
+
 freshVoid :: ( MonadRef r m
              , MonadSupply Label m
              ) => m (Mono r)
