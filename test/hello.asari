@@ -1,0 +1,39 @@
+fn if p x y {
+  switch p {
+    case true: x
+    case false: y
+  }
+}
+
+val true = enum true;
+val false = enum false;
+
+fn foo x {
+  switch x {
+    case A: true
+    case B: false
+  }
+}
+
+val x = struct A {
+  foo: a
+};
+
+if (foo x) (
+  a;
+  b;
+) (
+  a;
+  b;
+);
+
+fn when p x { if p x () }
+
+val y = struct B {
+  bar: b
+};
+
+when (foo y) (
+  a;
+  b;
+);
