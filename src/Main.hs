@@ -4,7 +4,7 @@ module Main
   ( main
   ) where
 
-import Control.Category
+import Control.Category ((>>>))
 import Control.Monad
 import Data.ByteString qualified as ByteString
 import System.IO

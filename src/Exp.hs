@@ -10,6 +10,7 @@ data Exp
   | App Exp Exp
   | Let Name Exp Exp
   | Seq Exp Exp
+  | Block Exp
   | Struct (Maybe Name) [(Name, Exp)]
   | Field Exp Name
   | Switch Exp (Name, Exp) [(Name, Exp)]

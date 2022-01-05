@@ -45,12 +45,14 @@ infer = \ case
       t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
       t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
       pure (Map.singleton x t_neg, t_pos)
-  Abs x e -> infer e >>= \ (env, t_e) -> case Map.lookup x env of
-    Just t_x ->
-      (Map.delete x env,) <$> freshFn t_x t_e
-    Nothing -> do
-      t_x <- fresh State.empty
-      (env,) <$> freshFn t_x t_e
+  Abs x e -> do
+    (env, t_e) <- local (Map.delete x) $ infer e
+    case Map.lookup x env of
+      Just t_x ->
+        (Map.delete x env,) <$> freshFn t_x t_e
+      Nothing -> do
+        t_x <- fresh State.empty
+        (env,) <$> freshFn t_x t_e
   App e1 e2 -> mdo
     (env_e1, t_e1) <- infer e1
     (env_e2, t_e2) <- infer e2
@@ -65,6 +67,10 @@ infer = \ case
     (env_e1, _) <- infer e1
     (env_e2, t_e2) <- infer e2
     (, t_e2) <$> union env_e1 env_e2
+  Block e -> do
+    (env, t_e) <- infer e
+    t_x <- freshVoid
+    (env,) <$> freshFn t_x t_e
   Exp.Struct x xs -> do
     (env, xs) <- forAccumLM mempty xs $ \ env (i, e) -> do
       (env_e, t_e) <- infer e

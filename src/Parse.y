@@ -41,23 +41,27 @@ import Token
 Void : { Void }
      | Let { $1 }
 
-Let : FieldName { $1 }
-    | FieldName ';' { Seq $1 Void }
-    | FieldName ';' Let { Seq $1 $3 }
-    | val name '=' App ';' Let { Let $2 $4 $6 }
+Let : Block { $1 }
+    | Block ';' { Seq $1 Void }
+    | Block ';' Let { Seq $1 $3 }
+    | val name '=' Block ';' Let { Let $2 $4 $6 }
     | fn name Names '{' Void '}' Let { Let $2 (foldr Abs $5 $3) $7 }
 
-FieldName : App { $1 }
-          | FieldName '.' name { Field $1 $3 }
+Block : FieldName { $1 }
+      | Block FieldName { App $1 $2 }
+      | Block '{' Void '}' { App $1 (Block $3) }
 
-App : Exp { $1 }
-    | App Exp { App $1 $2 }
+App : FieldName { $1 }
+    | App FieldName { App $1 $2 }
+
+FieldName : Exp { $1 }
+          | FieldName '.' name { Field $1 $3 }
 
 Exp : name { Exp.Var $1 }
     | '\\' Names '{' Void '}' { foldr Abs $4 $2 }
     | '(' Void ')' { $2 }
     | struct MaybeName '{' Fields '}' { Exp.Struct $2 $4 }
-    | switch Void '{' Case Cases '}' { Exp.Switch $2 $4 $5 }
+    | switch App '{' Case Cases '}' { Exp.Switch $2 $4 $5 }
     | enum name { Exp.Enum $2 }
 
 Names : RevNames { reverse $1 }
