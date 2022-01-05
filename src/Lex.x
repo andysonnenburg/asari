@@ -30,13 +30,17 @@ $alpha = [\_a-zA-Z]
   ")" { const RightParen }
   "." { const Period }
   "," { const Comma }
+  ":" { const Colon }
   ";" { const Semicolon }
   "=" { const Equals }
+  "\" { const Backslash }
   fn { const Fn }
   val { const Val }
   var { const Var }
   struct { const Struct }
   switch { const Switch }
+  case { const Case }
+  enumm { const Enum }
   $alpha [$alpha $digit]* { Name }
 
 {

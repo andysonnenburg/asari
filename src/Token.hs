@@ -11,12 +11,16 @@ data Token
   | RightParen
   | Period
   | Comma
+  | Colon
   | Semicolon
   | Equals
+  | Backslash
   | Fn
   | Val
   | Var
   | Struct
   | Switch
+  | Case
+  | Enum
   | Name Name
   | EOF deriving Show

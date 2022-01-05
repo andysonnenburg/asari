@@ -23,13 +23,17 @@ import Token
   ')' { RightParen }
   '.' { Period }
   ',' { Comma }
+  ':' { Colon }
   ';' { Semicolon }
   '=' { Equals }
+  '\\' { Backslash }
   fn { Fn }
   val { Val }
   var { Token.Var }
   struct { Token.Struct }
   switch { Token.Switch }
+  case { Token.Case }
+  enum { Token.Enum }
   name { Name $$ }
 
 %%
@@ -37,41 +41,46 @@ import Token
 Void : { Void }
      | Let { $1 }
 
-NonVoid : NonVoidLet { $1 }
-
-Let : Field { $1 }
-    | Field ';' { Seq $1 Void }
-    | Field ';' Let { Seq $1 $3 }
+Let : FieldName { $1 }
+    | FieldName ';' { Seq $1 Void }
+    | FieldName ';' Let { Seq $1 $3 }
     | val name '=' App ';' Let { Let $2 $4 $6 }
-    | fn name name '{' Void '}' Let { Let $2 (Abs $3 $5) $7 }
-    | fn name '(' name ')' '{' Void '}' Let { Let $2 (Abs $4 $7) $9 }
+    | fn name Names '{' Void '}' Let { Let $2 (foldr Abs $5 $3) $7 }
 
-NonVoidLet : Field { $1 }
-           | Field ';' NonVoidLet { Seq $1 $3 }
-           | val name '=' App ';' NonVoidLet { Let $2 $4 $6 }
-
-Field : App { $1 }
-      | Field '.' name { Field $1 $3 }
+FieldName : App { $1 }
+          | FieldName '.' name { Field $1 $3 }
 
 App : Exp { $1 }
     | App Exp { App $1 $2 }
 
 Exp : name { Exp.Var $1 }
-    | fn name '{' Void '}' { Abs $2 $4 }
-    | fn '(' name ')' '{' Void '}' { Abs $3 $6 }
-    | '(' NonVoid ')' { $2 }
-    | struct MaybeName '{' Labels '}' { Exp.Struct $2 $4 }
-    | switch NonVoid '{' Label Labels '}' { Exp.Switch $2 $4 $5 }
+    | '\\' Names '{' Void '}' { foldr Abs $4 $2 }
+    | '(' Void ')' { $2 }
+    | struct MaybeName '{' Fields '}' { Exp.Struct $2 $4 }
+    | switch Void '{' Case Cases '}' { Exp.Switch $2 $4 $5 }
+    | enum name { Exp.Enum $2 }
+
+Names : RevNames { reverse $1 }
+
+RevNames : name { [$1] }
+         | RevNames name { $2:$1 }
 
 MaybeName : { Nothing }
           | name { Just $1 }
 
-Labels : RevLabels { reverse $1 }
+Fields : RevFields { reverse $1 }
 
-RevLabels : { [] }
-          | RevLabels Label { $2 : $1 }
+RevFields : { [] }
+          | RevFields Field { $2:$1 }
 
-Label : name '{' Void '}' { ($1, $3) }
+Field : name ':' Exp { ($1, $3) }
+
+Cases : RevCases { reverse $1 }
+
+RevCases : { [] }
+         | RevCases Case { $2:$1 }
+
+Case : case name ':' Void { ($2, $4) }
 
 {
 lexer :: (Token -> Lex a) -> Lex a

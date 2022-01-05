@@ -102,6 +102,8 @@ infer = \ case
     t_e_neg <- freshUnion t_i
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
+  Enum i ->
+    (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
   Exp.Void ->
     (mempty,) <$> freshVoid
 

@@ -13,4 +13,5 @@ data Exp
   | Struct (Maybe Name) [(Name, Exp)]
   | Field Exp Name
   | Switch Exp (Name, Exp) [(Name, Exp)]
+  | Enum Name
   | Void deriving Show
