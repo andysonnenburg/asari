@@ -256,8 +256,8 @@ unionIntersectionWith f (xs, x) (ys, y) =
       (zs, Just (f x y))
       where
         zs = Ord.Map.unionWith'
-             (Just . maybe y (flip f y))
-             (Just . maybe x (f x))
+             (fmap (flip f y))
+             (fmap (f x))
              (liftA2 f)
              xs ys
 
