@@ -16,7 +16,6 @@ import Control.Monad.ST
 import Data.Coerce
 import Data.Foldable
 import Data.Map.Merge.Lazy qualified as Map
-import Data.Traversable
 
 import Error
 import Exp as Exp
@@ -88,14 +87,16 @@ infer = \ case
     z <- do
       let (i, e) = x
       (env_e, t_e, t_i) <- inferVarCase v i e
-      pure (env_e, t_e, [(i, Just t_i)])
+      pure (env_e, t_e, [(i, Just (Set.singleton t_i))])
     (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e, t_i) <- inferVarCase v i e
-      (,, (i, Just t_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    t_def <- for y $ \ y -> undefined
+      (,, (i, Just (Set.singleton t_i)):z) <$> union env_xs env_e <*> append t_xs t_e
+    (env_y, t_y, t_def) <- funzip3 <$> traverse (inferVarDefault v (fst <$> t_i)) y
     t_e_neg <- freshUnion t_i t_def
     unify t_e_pos t_e_neg
-    (, t_xs) <$> union env_e env_xs
+    (,) <$>
+      (maybe pure (flip union) env_y =<< union env_e env_xs) <*>
+      maybe pure (flip append) t_y t_xs
   Switch e x xs y -> do
     (env_e, t_e_pos) <- infer e
     z <- do
@@ -105,12 +106,14 @@ infer = \ case
       pure (env_e, t_e, [(i, Just t_i)])
     (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e) <- infer e
-      t_i <- Set.singleton <$> fresh State.empty
-      (,, (i, Just t_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    (env_def, t_def) <- unzip' <$> traverse infer y
-    t_e_neg <- freshUnion t_i t_def
+      t_i <- fresh State.empty
+      (,, (i, Just (Set.singleton t_i)):z) <$> union env_xs env_e <*> append t_xs t_e
+    (env_def, t_y) <- funzip <$> traverse infer y
+    t_e_neg <- freshUnion t_i . Just =<< fresh State.empty
     unify t_e_pos t_e_neg
-    (, t_xs) <$> (maybe pure (flip union) env_def =<< union env_e env_xs)
+    (,) <$>
+      (maybe pure (flip union) env_def =<< union env_e env_xs) <*>
+      maybe pure (flip append) t_y t_xs
   Enum i ->
     (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
   Exp.Void ->
@@ -123,19 +126,37 @@ inferVarCase :: ( MonadError Error m
                 , MonadReader (Map Name Type) m
                 , MonadRef r m
                 , MonadSupply Label m
-                ) => Name -> Name -> Exp Name -> m (Map Name (Mono r), Mono r, Set (Mono r))
+                ) => Name -> Name -> Exp Name -> m (Map Name (Mono r), Mono r, Mono r)
 inferVarCase v i e = do
   (env_e, t_e) <- infer e
   case Map.lookup v env_e of
-    Just t_i_neg -> mdo
-      t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
-      t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
-      t_i_pos <- freshCase i t_pos
-      unify t_i_pos t_i_neg
-      pure (Map.delete v env_e, t_e, Set.singleton t_neg)
+    Just t_neg -> mdo
+      t_i_neg <- newNFA State.empty mempty (Set.singleton t_i_pos)
+      t_i_pos <- newNFA State.empty mempty (Set.singleton t_i_neg)
+      t_pos <- freshCase i t_i_pos
+      unify t_pos t_neg
+      pure (Map.delete v env_e, t_e, t_i_neg)
     Nothing -> do
-      t_neg <- fresh State.empty
-      pure (env_e, t_e, Set.singleton t_neg)
+      t_i_neg <- fresh State.empty
+      pure (env_e, t_e, t_i_neg)
+
+inferVarDefault :: ( MonadError Error m
+                   , MonadFix m
+                   , MonadReader (Map Name Type) m, MonadRef r m
+                   , MonadSupply Label m
+                   ) => Name -> [Name] -> Exp Name -> m (Map Name (Mono r), Mono r, Mono r)
+inferVarDefault v i e = do
+  (env_e, t_e) <- infer e
+  case Map.lookup v env_e of
+    Just t_neg -> mdo
+      t_i_neg <- newNFA State.empty mempty (Set.singleton t_i_pos)
+      t_i_pos <- newNFA State.empty mempty (Set.singleton t_i_neg)
+      t_pos <- freshDefault i t_i_pos
+      unify t_pos t_neg
+      pure (Map.delete v env_e, t_e, t_i_neg)
+    Nothing -> do
+      t_i_neg <- fresh State.empty
+      pure (env_e, t_e, t_i_neg)
 
 newtype StateL s f a = StateL { runStateL :: s -> f (s, a) }
 
@@ -197,13 +218,20 @@ freshUnion :: ( MonadRef r m
               , MonadSupply Label m
               ) => [(Name, Maybe (Set (Mono r)))] -> Maybe (Mono r) -> m (Mono r)
 freshUnion xs =
-  fresh . State.singleton . Head.Union (Map.fromList xs) . fmap Set.singleton
+  fresh . State.singleton . Union (Map.fromList xs) . fmap Set.singleton
 
 freshCase :: ( MonadRef r m
              , MonadSupply Label m
              ) => Name -> Mono r -> m (Mono r)
 freshCase i =
   fresh . State.singleton . flip Union Nothing . Map.singleton i . Just . Set.singleton
+
+
+freshDefault :: ( MonadRef r m
+                , MonadSupply Label m
+                ) => [Name] -> Mono r -> m (Mono r)
+freshDefault i =
+  fresh . State.singleton . Union (Map.fromList ((, Nothing) <$> i)) . Just . Set.singleton
 
 freshAll :: ( MonadRef r m
             , MonadSupply Label m
@@ -234,8 +262,11 @@ newNFA :: ( MonadRef r m
 newNFA trans epsilonTrans flow =
   NFA <$> supply <*> newRef trans <*> newRef epsilonTrans <*> newRef flow
 
-unzip' :: Functor f => f (a, b) -> (f a, f b)
-unzip' x = (fst <$> x, snd <$> x)
+funzip :: Functor f => f (a, b) -> (f a, f b)
+funzip x = (fst <$> x, snd <$> x)
+
+funzip3 :: Functor f => f (a, b, c) -> (f a, f b, f c)
+funzip3 x = ((\ (x, _, _) -> x) <$> x, (\ (_, x, _) -> x) <$> x, (\ (_, _, x) -> x) <$> x)
 
 rotate :: (a -> b -> c -> d) -> b -> c -> a -> d
 rotate f b c a = f a b c
