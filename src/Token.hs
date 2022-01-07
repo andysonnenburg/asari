@@ -21,6 +21,7 @@ data Token
   | Struct
   | Switch
   | Case
+  | Default
   | Enum
   | Name Name
   | EOF deriving Show

@@ -40,6 +40,7 @@ $alpha = [\_a-zA-Z]
   struct { const Struct }
   switch { const Switch }
   case { const Case }
+  default { const Default }
   enum { const Enum }
   $alpha [$alpha $digit]* { Name }
 

@@ -32,7 +32,8 @@ import Token
   var { Token.Var }
   struct { Token.Struct }
   switch { Token.Switch }
-  case { Token.Case }
+  case { Case }
+  default { Default }
   enum { Token.Enum }
   name { Name $$ }
 
@@ -61,7 +62,7 @@ Exp : name { Exp.Var $1 }
     | '\\' Names '{' Void '}' { foldr Abs $4 $2 }
     | '(' Void ')' { $2 }
     | struct MaybeName '{' Fields '}' { Exp.Struct $2 $4 }
-    | switch App '{' Case Cases '}' { Exp.Switch $2 $4 $5 }
+    | switch App '{' Case Cases MaybeDefault '}' { Exp.Switch $2 $4 $5 }
     | enum name { Exp.Enum $2 }
 
 Names : RevNames { reverse $1 }
@@ -85,6 +86,11 @@ RevCases : { [] }
          | RevCases Case { $2:$1 }
 
 Case : case name ':' Void { ($2, $4) }
+
+MaybeDefault : { Nothing }
+             | Default { Just $1 }
+
+Default : default ':' Void { $2 }
 
 {
 lexer :: (Token -> Lex a) -> Lex a

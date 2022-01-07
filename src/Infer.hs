@@ -37,7 +37,7 @@ infer :: ( MonadError Error m
          , MonadReader (Map Name Type) m
          , MonadRef r m
          , MonadSupply Label m
-         ) => Exp -> m (MType r)
+         ) => Exp Name -> m (MType r)
 infer = \ case
   Var x -> Map.lookup x <$> ask >>= \ case
     Just t -> thaw t
@@ -87,10 +87,10 @@ infer = \ case
     z <- do
       let (i, e) = x
       (env_e, t_e, t_i) <- inferVarCase v i e
-      pure (env_e, t_e, [(i, t_i)])
+      pure (env_e, t_e, [(i, Just t_i)])
     (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e, t_i) <- inferVarCase v i e
-      (,, (i, t_i):z) <$> union env_xs env_e <*> append t_xs t_e
+      (,, (i, Just t_i):z) <$> union env_xs env_e <*> append t_xs t_e
     t_e_neg <- freshUnion t_i
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
@@ -100,11 +100,11 @@ infer = \ case
       let (i, e) = x
       (env_e, t_e) <- infer e
       t_i <- Set.singleton <$> fresh State.empty
-      pure (env_e, t_e, [(i, t_i)])
+      pure (env_e, t_e, [(i, Just t_i)])
     (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e) <- infer e
       t_i <- Set.singleton <$> fresh State.empty
-      (,, (i, t_i):z) <$> union env_xs env_e <*> append t_xs t_e
+      (,, (i, Just t_i):z) <$> union env_xs env_e <*> append t_xs t_e
     t_e_neg <- freshUnion t_i
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
@@ -120,7 +120,7 @@ inferVarCase :: ( MonadError Error m
                 , MonadReader (Map Name Type) m
                 , MonadRef r m
                 , MonadSupply Label m
-                ) => Name -> Name -> Exp -> m (Map Name (Mono r), Mono r, Set (Mono r))
+                ) => Name -> Name -> Exp Name -> m (Map Name (Mono r), Mono r, Set (Mono r))
 inferVarCase v i e = do
   (env_e, t_e) <- infer e
   case Map.lookup v env_e of
@@ -149,7 +149,7 @@ forAccumLM :: forall t f a b c .
               ) => b -> t a -> (b -> a -> f (b, c)) -> f (b, t c)
 forAccumLM s t f = coerce (traverse @t @(StateL b f) @a @c) (flip f) t s
 
-infer' :: Exp -> Either Error Type
+infer' :: Exp Name -> Either Error Type
 infer' e = runST (runSupplyT (runReaderT (runExceptT (infer e >>= freeze)) mempty))
 
 union :: ( State.Map t
@@ -192,20 +192,21 @@ freshField i x =
 
 freshUnion :: ( MonadRef r m
               , MonadSupply Label m
-              ) => [(Name, Set (Mono r))] -> m (Mono r)
+              ) => [(Name, Maybe (Set (Mono r)))] -> m (Mono r)
 freshUnion =
-  fresh . State.singleton . Head.Union . Map.fromList
+  fresh . State.singleton . flip Head.Union Nothing . Map.fromList
 
 freshCase :: ( MonadRef r m
              , MonadSupply Label m
              ) => Name -> Mono r -> m (Mono r)
-freshCase i x =
-  fresh (State.singleton (Union (Map.singleton i (Set.singleton x))))
+freshCase i =
+  fresh . State.singleton . flip Union Nothing . Map.singleton i . Just . Set.singleton
 
 freshAll :: ( MonadRef r m
             , MonadSupply Label m
             ) => Mono r -> m (Mono r)
-freshAll = fresh . State.singleton . All . Set.singleton
+freshAll =
+  fresh . State.singleton . Union mempty . Just . Set.singleton
 
 freshVoid :: ( MonadRef r m
              , MonadSupply Label m

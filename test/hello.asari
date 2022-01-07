@@ -1,4 +1,5 @@
 fn if p x e y {
+  switch e { case else: }
   switch p {
     case true: x ()
     case false: y ()
