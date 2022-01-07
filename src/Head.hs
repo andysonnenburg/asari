@@ -157,6 +157,12 @@ instance Map HeadMap where
       (Union xs x, Union ys y) -> unionIsSubmapOf xs x ys y
       _ -> False
 
+unionBizipWithM_ :: (Ord k, Applicative f) =>
+                    (a -> b -> f c) ->
+                    (Ord.Map.Map k (Maybe a), Maybe a) ->
+                    (Ord.Map.Map k (Maybe b), Maybe b) ->
+                    f ()
+
 unionBizipWithM_ f (xs, x) (ys, y) =
   case (x, y) of
     (Nothing, Nothing) ->
@@ -178,7 +184,8 @@ unionBizipWithM_ f (xs, x) (ys, y) =
       (maybe (pure ()) (Functor.void . flip f y))
       (maybe (pure ()) (Functor.void . f x))
       ((sequenceA .) . liftA2 f)
-      xs ys
+      xs ys *>
+      Functor.void (f x y)
 
 unionUnionWith :: Ord k =>
                   (a -> a -> a) ->
@@ -218,6 +225,11 @@ unionUnionWith f (xs, x) (ys, y) =
              (unionMaybe f)
              xs ys
 
+unionIntersectionWith :: Ord k =>
+                         (a -> a -> a) ->
+                         (Ord.Map.Map k (Maybe a), Maybe a) ->
+                         (Ord.Map.Map k (Maybe a), Maybe a) ->
+                         (Ord.Map.Map k (Maybe a), Maybe a)
 unionIntersectionWith f (xs, x) (ys, y) =
   case (x, y) of
     (Nothing, Nothing) ->
@@ -255,19 +267,19 @@ unionIsSubmapOf :: Ord k =>
                    Ord.Map.Map k (Maybe a) ->
                    Maybe a ->
                    Bool
-unionIsSubmapOf xs x ys y = case (x, y) of
+unionIsSubmapOf xs x ys y = case (y, x) of
   (Nothing, Nothing) ->
     Ord.Map.isSubmapOfBy'
     (maybe True (const False))
     (const True)
     (maybe (const True) (const isJust))
-    xs ys
+    ys xs
   (Nothing, Just _) ->
     Ord.Map.isSubmapOfBy'
     (const True)
     (const True)
     (maybe (const True) (const isJust))
-    xs ys
+    ys xs
   (Just _, Nothing) ->
     False
   (Just _, Just _) ->
@@ -275,7 +287,7 @@ unionIsSubmapOf xs x ys y = case (x, y) of
     (const True)
     (maybe False (const True))
     (maybe (const True) (const isJust))
-    xs ys
+    ys xs
 
 allKeys :: (Head a -> Bool) -> HeadMap a -> Bool
 allKeys f HeadMap {..} =
