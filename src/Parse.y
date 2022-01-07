@@ -62,7 +62,7 @@ Exp : name { Exp.Var $1 }
     | '\\' Names '{' Void '}' { foldr Abs $4 $2 }
     | '(' Void ')' { $2 }
     | struct MaybeName '{' Fields '}' { Exp.Struct $2 $4 }
-    | switch App '{' Case Cases MaybeDefault '}' { Exp.Switch $2 $4 $5 }
+    | switch App '{' Case Cases MaybeDefault '}' { Exp.Switch $2 $4 $5 $6 }
     | enum name { Exp.Enum $2 }
 
 Names : RevNames { reverse $1 }
@@ -90,7 +90,7 @@ Case : case name ':' Void { ($2, $4) }
 MaybeDefault : { Nothing }
              | Default { Just $1 }
 
-Default : default ':' Void { $2 }
+Default : default ':' Void { $3 }
 
 {
 lexer :: (Token -> Lex a) -> Lex a

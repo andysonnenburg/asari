@@ -16,7 +16,8 @@ import Data.Bifoldable
 import Data.Bifunctor
 import Data.Bitraversable qualified as Bitraversable
 import Data.Functor qualified as Functor
-import Data.Maybe (catMaybes, isJust)
+import Data.Maybe (catMaybes, isJust, isNothing)
+import Data.Foldable (traverse_)
 
 import Map.Lazy qualified as Ord (Map)
 import Map.Lazy qualified as Ord.Map
@@ -162,30 +163,35 @@ unionBizipWithM_ :: (Ord k, Applicative f) =>
                     (Ord.Map.Map k (Maybe a), Maybe a) ->
                     (Ord.Map.Map k (Maybe b), Maybe b) ->
                     f ()
-
 unionBizipWithM_ f (xs, x) (ys, y) =
   case (x, y) of
     (Nothing, Nothing) ->
-      Ord.Map.zipWithM_ ((sequenceA .) . liftA2 f) xs ys
+      Ord.Map.zipWithM_ (traverse2 f) xs ys
     (Nothing, Just y) ->
       Ord.Map.zipWithM_'
-      (maybe (pure ()) (Functor.void . flip f y))
+      (traverse_ (flip f y))
       (const (pure ()))
-      ((sequenceA .) . liftA2 f)
+      (traverse2 f)
       xs ys
     (Just x, Nothing) ->
       Ord.Map.zipWithM_'
       (const (pure ()))
-      (maybe (pure ()) (Functor.void . f x))
-      ((sequenceA .) . liftA2 f)
+      (traverse_ (f x))
+      (traverse2 f)
       xs ys
     (Just x, Just y) ->
       Ord.Map.zipWithM_'
-      (maybe (pure ()) (Functor.void . flip f y))
-      (maybe (pure ()) (Functor.void . f x))
-      ((sequenceA .) . liftA2 f)
+      (traverse_ (flip f y))
+      (traverse_ (f x))
+      (traverse2 f)
       xs ys *>
       Functor.void (f x y)
+
+traverse2 :: ( Applicative f
+             , Applicative t
+             , Traversable t
+             ) => (a -> b -> f c) -> t a -> t b -> f (t c)
+traverse2 f = (sequenceA .) . liftA2 f
 
 unionUnionWith :: Ord k =>
                   (a -> a -> a) ->
@@ -270,7 +276,7 @@ unionIsSubmapOf :: Ord k =>
 unionIsSubmapOf xs x ys y = case (y, x) of
   (Nothing, Nothing) ->
     Ord.Map.isSubmapOfBy'
-    (maybe True (const False))
+    isNothing
     (const True)
     (maybe (const True) (const isJust))
     ys xs
@@ -285,7 +291,7 @@ unionIsSubmapOf xs x ys y = case (y, x) of
   (Just _, Just _) ->
     Ord.Map.isSubmapOfBy'
     (const True)
-    (maybe False (const True))
+    isJust
     (maybe (const True) (const isJust))
     ys xs
 

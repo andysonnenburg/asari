@@ -13,6 +13,6 @@ data Exp a
   | Block (Exp a)
   | Struct (Maybe Name) [(Name, Exp a)]
   | Field (Exp a) Name
-  | Switch (Exp a) (Name, Exp a) [(Name, Exp a)]
+  | Switch (Exp a) (Name, Exp a) [(Name, Exp a)] (Maybe (Exp a))
   | Enum Name
   | Void deriving Show

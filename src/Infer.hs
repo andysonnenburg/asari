@@ -16,6 +16,7 @@ import Control.Monad.ST
 import Data.Coerce
 import Data.Foldable
 import Data.Map.Merge.Lazy qualified as Map
+import Data.Traversable
 
 import Error
 import Exp as Exp
@@ -82,7 +83,7 @@ infer = \ case
     t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
     unify t_e =<< freshField i t_neg
     pure (env_e, t_pos)
-  Switch e@(Var v) x xs -> do
+  Switch e@(Var v) x xs y -> do
     (env_e, t_e_pos) <- infer e
     z <- do
       let (i, e) = x
@@ -91,10 +92,11 @@ infer = \ case
     (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e, t_i) <- inferVarCase v i e
       (,, (i, Just t_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    t_e_neg <- freshUnion t_i
+    t_def <- for y $ \ y -> undefined
+    t_e_neg <- freshUnion t_i t_def
     unify t_e_pos t_e_neg
     (, t_xs) <$> union env_e env_xs
-  Switch e x xs -> do
+  Switch e x xs y -> do
     (env_e, t_e_pos) <- infer e
     z <- do
       let (i, e) = x
@@ -105,9 +107,10 @@ infer = \ case
       (env_e, t_e) <- infer e
       t_i <- Set.singleton <$> fresh State.empty
       (,, (i, Just t_i):z) <$> union env_xs env_e <*> append t_xs t_e
-    t_e_neg <- freshUnion t_i
+    (env_def, t_def) <- unzip' <$> traverse infer y
+    t_e_neg <- freshUnion t_i t_def
     unify t_e_pos t_e_neg
-    (, t_xs) <$> union env_e env_xs
+    (, t_xs) <$> (maybe pure (flip union) env_def =<< union env_e env_xs)
   Enum i ->
     (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
   Exp.Void ->
@@ -192,9 +195,9 @@ freshField i x =
 
 freshUnion :: ( MonadRef r m
               , MonadSupply Label m
-              ) => [(Name, Maybe (Set (Mono r)))] -> m (Mono r)
-freshUnion =
-  fresh . State.singleton . flip Head.Union Nothing . Map.fromList
+              ) => [(Name, Maybe (Set (Mono r)))] -> Maybe (Mono r) -> m (Mono r)
+freshUnion xs =
+  fresh . State.singleton . Head.Union (Map.fromList xs) . fmap Set.singleton
 
 freshCase :: ( MonadRef r m
              , MonadSupply Label m
@@ -230,6 +233,9 @@ newNFA :: ( MonadRef r m
           ) => t (Set (NFA r t)) -> Set (NFA r t) -> Set (NFA r t) -> m (NFA r t)
 newNFA trans epsilonTrans flow =
   NFA <$> supply <*> newRef trans <*> newRef epsilonTrans <*> newRef flow
+
+unzip' :: Functor f => f (a, b) -> (f a, f b)
+unzip' x = (fst <$> x, snd <$> x)
 
 rotate :: (a -> b -> c -> d) -> b -> c -> a -> d
 rotate f b c a = f a b c
