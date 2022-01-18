@@ -1,40 +1,48 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 module Unify
-  ( unify
+  ( MonadUnifyError (..)
+  , unify
   ) where
 
 import Control.Monad
-import Control.Monad.Error.Class (MonadError, throwError)
 import Control.Monad.Fix
 import Control.Monad.State.Strict
 import Data.Bool
 import Data.Foldable
 
-import Error
 import FA
-import Head
 import Ref
 import Set (Set)
 import Set qualified
 import State qualified
 
-unify :: ( MonadError Error m
+class Monad m => MonadUnifyError t m where
+  throwUnifyError :: t a -> t a -> m b
+
+instance MonadUnifyError t m => MonadUnifyError t (StateT s m) where
+  throwUnifyError x y = lift $ throwUnifyError x y
+
+unify :: ( State.Map t
+         , MonadUnifyError t m
          , MonadFix m
          , MonadRef r m
-         ) => NFA r HeadMap -> NFA r HeadMap -> m ()
+         ) => NFA r t -> NFA r t -> m ()
 unify x y = evalStateT (unify' x y) mempty
 
-unify' :: ( MonadError Error m
+unify' :: ( State.Map t
+          , MonadUnifyError t m
           , MonadFix m
           , MonadRef r m
-          , MonadState (Set (NFA r HeadMap, NFA r HeadMap)) m
-          ) => NFA r HeadMap -> NFA r HeadMap -> m ()
+          , MonadState (Set (NFA r t, NFA r t)) m
+          ) => NFA r t -> NFA r t -> m ()
 unify' = fix $ \ recur x y -> unlessM (gets (Set.member (x, y))) $ do
   modify $ Set.insert (x, y)
   unlessM (State.isSubmapOf <$> readRef y.trans <*> readRef x.trans) $
-    throwError =<< UnifyError <$> (void <$> readRef y.trans) <*> (void <$> readRef x.trans)
+    join $ throwUnifyError <$> readRef x.trans <*> readRef y.trans
   readRef y.flow >>= traverse_ (flip mergePos x)
   readRef x.flow >>= traverse_ (flip mergeNeg y)
   let f xs ys = sequence $ recur <$> toList xs <*> toList ys

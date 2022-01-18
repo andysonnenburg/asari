@@ -6,9 +6,10 @@ import Name
 
 data Exp a
   = Var a
-  | Abs a (Exp a)
+  | Abs [a] (Exp a)
   | App (Exp a) (Exp a)
-  | Let a (Exp a) (Exp a)
+  | Val a (Exp a) (Exp a)
+  | Fn a [a] (Exp a) (Exp a)
   | Seq (Exp a) (Exp a)
   | Block (Exp a)
   | Struct (Maybe Name) [(Name, Exp a)]

@@ -1,5 +1,7 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 module Map.Lazy
   ( module Data.Map.Lazy
+  , deleteAll
   , zipWithM_
   , zipWithM_'
   , unionWith'
@@ -8,9 +10,13 @@ module Map.Lazy
   ) where
 
 import Data.Coerce
+import Data.Foldable qualified as Foldable
 import Data.Functor
 import Data.Map.Lazy
 import Data.Map.Merge.Lazy
+
+deleteAll :: (Foldable f, Ord k) => f k -> Map k a -> Map k a
+deleteAll = flip (Foldable.foldl' (flip delete))
 
 newtype ZipWithM_ f a = ZipWithM_ { getZipWithM_ :: f () }
 

@@ -31,19 +31,19 @@ instance MonadRef (STRef s) (ST s) where
 instance MonadRef r m => MonadRef r (ExceptT e m) where
   newRef = lift . newRef
   readRef = lift . readRef
-  writeRef x = lift . writeRef x
+  writeRef = (lift .) . writeRef
 
 instance MonadRef r m => MonadRef r (ReaderT r' m) where
   newRef = lift . newRef
   readRef = lift . readRef
-  writeRef x = lift . writeRef x
+  writeRef = (lift .) . writeRef
 
 instance MonadRef r m => MonadRef r (StateT s m) where
   newRef = lift . newRef
   readRef = lift . readRef
-  writeRef x = lift . writeRef x
+  writeRef = (lift .) . writeRef
 
 instance (Monoid w, MonadRef r m) => MonadRef r (WriterT w m) where
   newRef = lift . newRef
   readRef = lift . readRef
-  writeRef x = lift . writeRef x
+  writeRef = (lift .) . writeRef

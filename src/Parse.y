@@ -27,8 +27,8 @@ import Token
   ';' { Semicolon }
   '=' { Equals }
   '\\' { Backslash }
-  fn { Fn }
-  val { Val }
+  fn { Token.Fn }
+  val { Token.Val }
   var { Token.Var }
   struct { Token.Struct }
   switch { Token.Switch }
@@ -45,8 +45,8 @@ Void : { Void }
 Let : Block { $1 }
     | Block ';' { Seq $1 Void }
     | Block ';' Let { Seq $1 $3 }
-    | val name '=' Block ';' Let { Let $2 $4 $6 }
-    | fn name Names '{' Void '}' Let { Let $2 (foldr Abs $5 $3) $7 }
+    | val name '=' Block ';' Let { Exp.Val $2 $4 $6 }
+    | fn name Names '{' Void '}' Let { Exp.Fn $2 $3 $5 $7 }
 
 Block : FieldName { $1 }
       | Block FieldName { App $1 $2 }
@@ -59,7 +59,7 @@ FieldName : Exp { $1 }
           | FieldName '.' name { Field $1 $3 }
 
 Exp : name { Exp.Var $1 }
-    | '\\' Names '{' Void '}' { foldr Abs $4 $2 }
+    | '\\' Names '{' Void '}' { Abs $2 $4 }
     | '(' Void ')' { $2 }
     | struct MaybeName '{' Fields '}' { Exp.Struct $2 $4 }
     | switch App '{' Case Cases MaybeDefault '}' { Exp.Switch $2 $4 $5 $6 }
