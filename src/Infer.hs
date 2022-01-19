@@ -113,8 +113,8 @@ infer = \ case
     z <- do
       let (i, e) = x
       (env_e, t_e) <- infer e
-      t_i <- Set.singleton <$> fresh State.empty
-      pure (env_e, t_e, [(i, Just t_i)])
+      t_i <- fresh State.empty
+      pure (env_e, t_e, [(i, Just (Set.singleton t_i))])
     (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e) <- infer e
       t_i <- fresh State.empty
@@ -156,7 +156,7 @@ inferVarCase :: ( Ord a
                 , MonadSupply Label m
                 ) => a -> Name -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
 inferVarCase v i e = do
-  (env_e, t_e) <- infer e
+  (env_e, t_e) <- local (Map.delete v) $ infer e
   case Map.lookup v env_e of
     Just t_neg -> mdo
       t_i_neg <- newNFA State.empty mempty (Set.singleton t_i_pos)
@@ -176,7 +176,7 @@ inferVarDefault :: ( Ord a
                    , MonadSupply Label m
                    ) => a -> [Name] -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
 inferVarDefault v i e = do
-  (env_e, t_e) <- infer e
+  (env_e, t_e) <- local (Map.delete v) $ infer e
   case Map.lookup v env_e of
     Just t_neg -> mdo
       t_i_neg <- newNFA State.empty mempty (Set.singleton t_i_pos)
