@@ -16,7 +16,7 @@ module Infer
   ) where
 
 import Control.Monad.Except
-import Control.Monad.Reader
+import Control.Monad.State.Strict
 import Control.Monad.ST
 import Data.Coerce
 import Data.Foldable
@@ -45,16 +45,28 @@ type MMono r = NFA r HeadMap
 
 type MPoly a r = (Map a (MMono r), MMono r)
 
+data VarState a
+  = Exp (Exp a)
+  | Poly (Poly a)
+
 infer :: ( Ord a
          , MonadError Error m
          , MonadFix m
-         , MonadReader (Map a (Poly a)) m
+         , MonadState (Map a (VarState a)) m
          , MonadRef r m
          , MonadSupply Label m
          ) => Exp a -> m (MPoly a r)
 infer = \ case
-  Var x -> Map.lookup x <$> ask >>= \ case
-    Just t -> thaw t
+  Var x -> Map.lookup x <$> get >>= \ case
+    Just (Poly t) -> thaw t
+    Just (Exp e) -> do
+      modify $ Map.delete x
+      t_e@(env, t_pos) <- infer e
+      t <- rotateR maybe (Map.lookup x env) (freeze t_e) $ \ t_neg -> do
+        unify' t_pos t_neg
+        freeze (Map.delete x env, t_pos)
+      modify $ Map.insert x (Poly t)
+      thaw t
     Nothing -> mdo
       t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
       t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
@@ -70,10 +82,10 @@ infer = \ case
     (, t_pos) <$> union env_e1 env_e2
   Val x e1 e2 -> do
     t_e1 <- freeze =<< infer e1
-    local (Map.insert x t_e1) $ infer e2
+    local (Map.insert x (Poly t_e1)) $ infer e2
   Exp.Fn x xs e1 e2 -> do
     t_e1 <- freeze =<< inferAbs xs e1
-    local (Map.insert x t_e1) $ infer e2
+    local (Map.insert x (Poly t_e1)) $ infer e2
   Seq e1 e2 -> do
     (env_e1, _) <- infer e1
     (env_e2, t_e2) <- infer e2
@@ -99,7 +111,7 @@ infer = \ case
       let (i, e) = x
       (env_e, t_e, t_i) <- inferVarCase v i e
       pure (env_e, t_e, [(i, Just (Set.singleton t_i))])
-    (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
+    (env_xs, t_xs, t_i) <- rotateL foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e, t_i) <- inferVarCase v i e
       (,, (i, Just (Set.singleton t_i)):z) <$> union env_xs env_e <*> append t_xs t_e
     (env_y, t_y, t_def) <- funzip3 <$> traverse (inferVarDefault v (fst <$> t_i)) y
@@ -115,7 +127,7 @@ infer = \ case
       (env_e, t_e) <- infer e
       t_i <- fresh State.empty
       pure (env_e, t_e, [(i, Just (Set.singleton t_i))])
-    (env_xs, t_xs, t_i) <- rotate foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
+    (env_xs, t_xs, t_i) <- rotateL foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e) <- infer e
       t_i <- fresh State.empty
       (,, (i, Just (Set.singleton t_i)):z) <$> union env_xs env_e <*> append t_xs t_e
@@ -134,13 +146,13 @@ inferAbs :: ( Ord a
             , Foldable t
             , MonadError Error m
             , MonadFix m
-            , MonadReader (Map a (Poly a)) m
+            , MonadState (Map a (VarState a)) m
             , MonadRef r m
             , MonadSupply Label m
             ) => t a -> Exp a -> m (MPoly a r)
 inferAbs xs e = do
   z <- local (Map.deleteAll xs) $ infer e
-  rotate foldrM z xs $ \ x (env, t) ->
+  rotateL foldrM z xs $ \ x (env, t) ->
     case Map.lookup x env of
       Just t_x ->
         (Map.delete x env,) <$> freshFn t_x t
@@ -151,7 +163,7 @@ inferAbs xs e = do
 inferVarCase :: ( Ord a
                 , MonadError Error m
                 , MonadFix m
-                , MonadReader (Map a (Poly a)) m
+                , MonadState (Map a (VarState a)) m
                 , MonadRef r m
                 , MonadSupply Label m
                 ) => a -> Name -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
@@ -171,7 +183,7 @@ inferVarCase v i e = do
 inferVarDefault :: ( Ord a
                    , MonadError Error m
                    , MonadFix m
-                   , MonadReader (Map a (Poly a)) m
+                   , MonadState (Map a (VarState a)) m
                    , MonadRef r m
                    , MonadSupply Label m
                    ) => a -> [Name] -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
@@ -223,7 +235,7 @@ forAccumLM :: forall t f a b c .
 forAccumLM s t f = coerce (traverse @t @(StateL b f) @a @c) (flip f) t s
 
 infer' :: Ord a => Exp a -> Either Error (Poly a)
-infer' e = runST (runSupplyT (runReaderT (runExceptT (infer e >>= freeze)) mempty))
+infer' e = runST (runSupplyT (evalStateT (runExceptT (infer e >>= freeze)) mempty))
 
 union :: ( Ord a
          , State.Map t
@@ -312,11 +324,22 @@ newNFA :: ( MonadRef r m
 newNFA trans epsilonTrans flow =
   NFA <$> supply <*> newRef trans <*> newRef epsilonTrans <*> newRef flow
 
+local :: MonadState s m => (s -> s) -> m a -> m a
+local f m = do
+  s <- get
+  put $ f s
+  x <- m
+  put s
+  pure x
+
 funzip :: Functor f => f (a, b) -> (f a, f b)
 funzip x = (fst <$> x, snd <$> x)
 
 funzip3 :: Functor f => f (a, b, c) -> (f a, f b, f c)
 funzip3 x = ((\ (x, _, _) -> x) <$> x, (\ (_, x, _) -> x) <$> x, (\ (_, _, x) -> x) <$> x)
 
-rotate :: (a -> b -> c -> d) -> b -> c -> a -> d
-rotate f b c a = f a b c
+rotateL :: (a -> b -> c -> d) -> b -> c -> a -> d
+rotateL f b c a = f a b c
+
+rotateR :: (a -> b -> c -> d) -> c -> a -> b -> d
+rotateR f c a b = f a b c
