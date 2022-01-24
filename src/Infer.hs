@@ -15,6 +15,7 @@ module Infer
   , infer'
   ) where
 
+import Control.Arrow (first)
 import Control.Monad.Except
 import Control.Monad.State.Strict
 import Control.Monad.ST
@@ -46,7 +47,7 @@ type MMono r = NFA r HeadMap
 type MPoly a r = (Map a (MMono r), MMono r)
 
 data VarState a
-  = Exp (Exp a)
+  = Exp [a] (Exp a)
   | Poly (Poly a)
 
 infer :: ( Ord a
@@ -59,10 +60,10 @@ infer :: ( Ord a
 infer = \ case
   Var x -> Map.lookup x <$> get >>= \ case
     Just (Poly t) -> thaw t
-    Just (Exp e) -> do
+    Just (Exp xs e) -> do
       modify $ Map.delete x
-      t_e@(env, t_pos) <- infer e
-      t <- rotateR maybe (Map.lookup x env) (freeze t_e) $ \ t_neg -> do
+      t@(env, t_pos) <- inferAbs xs e
+      t <- rotateR maybe (Map.lookup x env) (freeze t) $ \ t_neg -> do
         unify' t_pos t_neg
         freeze (Map.delete x env, t_pos)
       modify $ Map.insert x (Poly t)
@@ -84,8 +85,22 @@ infer = \ case
     t_e1 <- freeze =<< infer e1
     local (Map.insert x (Poly t_e1)) $ infer e2
   Exp.Fn x xs e1 e2 -> do
-    t_e1 <- freeze =<< inferAbs xs e1
-    local (Map.insert x (Poly t_e1)) $ infer e2
+    s <- get
+    for_ (y:ys) $ \ (x, xs, e1) ->
+      modify $ Map.insert x (Exp xs e1)
+    for_ (reverse (y:ys)) $ \ (x, xs, e1) -> do
+      modify $ Map.delete x
+      t@(env, t_pos) <- inferAbs xs e1
+      t <- rotateR maybe (Map.lookup x env) (freeze t) $ \ t_neg -> do
+        unify' t_pos t_neg
+        freeze (Map.delete x env, t_pos)
+      modify $ Map.insert x (Poly t)
+    t_e2' <- infer e2'
+    put s
+    pure t_e2'
+    where
+      y = (x, xs, e1)
+      (ys, e2') = unfoldr' getFn e2
   Seq e1 e2 -> do
     (env_e1, _) <- infer e1
     (env_e2, t_e2) <- infer e2
@@ -219,6 +234,11 @@ unify' :: ( MonadError Error m
           ) => MMono r -> MMono r -> m ()
 unify' x y = runUnifyErrorT (unify x y)
 
+getFn :: Exp a -> Maybe ((a, [a], Exp a), Exp a)
+getFn = \ case
+  Exp.Fn x xs e1 e2 -> Just ((x, xs, e1), e2)
+  _ -> Nothing
+
 newtype StateL s f a = StateL { runStateL :: s -> f (s, a) }
 
 instance Functor f => Functor (StateL s f) where
@@ -331,6 +351,11 @@ local f m = do
   x <- m
   put s
   pure x
+
+unfoldr' :: (b -> Maybe (a, b)) -> b -> ([a], b)
+unfoldr' f = fix $ \ recur x -> case f x of
+  Nothing -> ([], x)
+  Just (y, x) -> first (y:) (recur x)
 
 funzip :: Functor f => f (a, b) -> (f a, f b)
 funzip x = (fst <$> x, snd <$> x)
