@@ -76,9 +76,10 @@ MaybeName : { Nothing }
 Fields : RevFields { reverse $1 }
 
 RevFields : { [] }
-          | RevFields Field { $2:$1 }
+          | Field { [$1] }
+          | RevFields ',' Field { $3:$1 }
 
-Field : name ':' Exp { ($1, $3) }
+Field : name ':' Block { ($1, $3) }
 
 Cases : RevCases { reverse $1 }
 
