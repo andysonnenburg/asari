@@ -19,38 +19,53 @@ author: Andy Sonnenburg
 -- An email address to which users can send suggestions, bug reports, and patches.
 -- maintainer:
 
-executable asari
-    main-is: Main.hs
+library
+  exposed-modules:
+    Error
+    Exp
+    FA
+    Head
+    Infer
+    Lex
+    Map.Lazy
+    Name
+    Parse
+    Ref
+    Set
+    State
+    Supply
+    Token
+    Unify
+  build-tool-depends: alex:alex, happy:happy
+  build-depends:
+    base ^>=4.16.0.0,
+    array,
+    bytestring,
+    containers,
+    mtl,
+    prettyprinter,
+    text
+  hs-source-dirs: src
+  ghc-options: -Wall -Wno-name-shadowing
+  default-language: Haskell2010
 
-    -- Modules included in this executable, other than Main.
-    other-modules:
-      Error
-      Exp
-      FA
-      Head
-      Infer
-      Lex
-      Map.Lazy
-      Name
-      Parse
-      Ref
-      Set
-      State
-      Supply
-      Token
-      Unify
+executable asari-main
+  main-is: Main.hs
+  build-depends:
+    base ^>=4.16.0.0,
+    bytestring,
+    asari
+  hs-source-dirs: main
+  ghc-options: -Wall
+  default-language: Haskell2010
 
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-    build-tools: alex, happy
-    build-depends:
-      base ^>=4.16.0.0,
-      array,
-      bytestring,
-      containers,
-      mtl,
-      prettyprinter,
-      text
-    hs-source-dirs: src
-    ghc-options: -Wall -Wno-name-shadowing
-    default-language: Haskell2010
+test-suite asari-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  hs-source-dirs: test
+  ghc-options: -Wall
+  build-depends:
+    base ^>=4.16.0.0,
+    hspec == 2.*
+  default-language: Haskell2010
+  build-tool-depends: hspec-discover:hspec-discover == 2.*
