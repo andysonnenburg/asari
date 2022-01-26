@@ -82,8 +82,7 @@ infer = \ case
   Val x e1 e2 -> do
     t_e1 <- freeze =<< infer e1
     local (Map.insert x (Poly t_e1)) $ infer e2
-  Exp.Fn x xs e1 e2 -> do
-    s <- get
+  Exp.Fn x xs e1 e2 -> local' $ do
     for_ (y:ys) $ \ (x, xs, e1) ->
       modify $ Map.insert x (Exp xs e1)
     for_ (reverse (y:ys)) $ \ (x, xs, e1) -> do
@@ -93,9 +92,7 @@ infer = \ case
         unify' t_pos t_neg
         freeze (Map.delete x env, t_pos)
       modify $ Map.insert x (Poly t)
-    t_e2' <- infer e2'
-    put s
-    pure t_e2'
+    infer e2'
     where
       y = (x, xs, e1)
       (ys, e2') = unfoldr' getFn e2
@@ -367,6 +364,13 @@ local :: MonadState s m => (s -> s) -> m a -> m a
 local f m = do
   s <- get
   put $ f s
+  x <- m
+  put s
+  pure x
+
+local' :: MonadState s m => m a -> m a
+local' m = do
+  s <- get
   x <- m
   put s
   pure x
