@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE ImportQualifiedPost #-}
@@ -39,7 +38,6 @@ type Label = Word
 data NFA r t = NFA
   { label :: Label
   , trans :: r (t (Set (NFA r t)))
-  , epsilonTrans :: r (Set (NFA r t))
   , flow :: r (Set (NFA r t))
   }
 
@@ -73,42 +71,42 @@ fromNegNFA :: ( State.Map t
               , MonadFix m
               , MonadRef r m
               ) => NFA r t -> FreezeT r t m (DFA t)
-fromNegNFA = fromNegNFA' <=< epsilonClosure
-
-fromPosNFA :: ( State.Map t
-              , MonadFix m
-              , MonadRef r m
-              ) => NFA r t -> FreezeT r t m (DFA t)
-fromPosNFA = fromPosNFA' <=< epsilonClosure
+fromNegNFA = fromNegNFA' . Set.singleton
 
 fromNegNFA' :: ( State.Map t
                , MonadFix m
                , MonadRef r m
                ) => Set (NFA r t) -> FreezeT r t m (DFA t)
-fromNegNFA' xs = gets (Map.lookup xs) >>= \ case
-  Just y -> pure y
-  Nothing -> mfix $ \ y ->
-    putDFA xs y >>
-    DFA <$> supply <*> getDFATrans xs <*> getDFAFlow xs
+fromNegNFA' xs =
+  gets (Map.lookup xs) >>=
+  (flip maybe pure $ mfix $ \ y ->
+      putDFA xs y >>
+      DFA <$> supply <*> getTrans xs <*> getDFAFlow xs)
   where
-    getDFATrans =
-      foldMapM' append State.empty transClosure >=>
+    getTrans =
+      foldMapM' append State.empty (readRef . (.trans)) >=>
       State.bitraverse fromPosNFA' fromNegNFA'
     append =
       State.intersectionWith (<>)
+
+fromPosNFA :: ( State.Map t
+              , MonadFix m
+              , MonadRef r m
+              ) => NFA r t -> FreezeT r t m (DFA t)
+fromPosNFA = fromPosNFA' . Set.singleton
 
 fromPosNFA' :: ( State.Map t
                , MonadFix m
                , MonadRef r m
                ) => Set (NFA r t) -> FreezeT r t m (DFA t)
-fromPosNFA' xs = gets (Map.lookup xs) >>= \ case
-  Just y -> pure y
-  Nothing -> mfix $ \ y ->
-    putDFA xs y >>
-    DFA <$> supply <*> getDFATrans xs <*> getDFAFlow xs
+fromPosNFA' xs =
+  gets (Map.lookup xs) >>=
+  (flip maybe pure $ mfix $ \ y ->
+      putDFA xs y >>
+      DFA <$> supply <*> getTrans xs <*> getDFAFlow xs)
   where
-    getDFATrans =
-      foldMapM' append State.empty transClosure >=>
+    getTrans =
+      foldMapM' append State.empty (readRef . (.trans)) >=>
       State.bitraverse fromNegNFA' fromPosNFA'
     append =
       State.unionWith (<>)
@@ -123,20 +121,6 @@ getDFAFlow :: ( MonadReader (MultiMap (NFA r t) (DFA t)) m
               ) => Set (NFA r t) -> m (Set (DFA t))
 getDFAFlow = foldMapM (\ x -> lookupMany <$> readRef x.flow <*> ask)
 
-epsilonClosure :: MonadRef r m => NFA r t -> m (Set (NFA r t))
-epsilonClosure = epsilonClosure' mempty
-
-epsilonClosure' :: MonadRef r m => Set (NFA r t) -> NFA r t -> m (Set (NFA r t))
-epsilonClosure' = fix $ \ recur xs x ->
-  case Set.insertMember x xs of
-    Nothing -> pure xs
-    Just xs -> foldlM recur xs =<< readRef x.epsilonTrans
-
-transClosure :: ( State.Map t
-                , MonadRef r m
-                ) => NFA r t -> m (t (Set (NFA r t)))
-transClosure x = traverse (foldlM epsilonClosure' mempty) =<< readRef x.trans
-
 type ThawT r t = StateT (Map (DFA t) (NFA r t))
 
 evalThawT :: Monad m => ThawT r t m a -> m a
@@ -147,14 +131,14 @@ fromDFA :: ( Traversable t
            , MonadRef r m
            , MonadSupply Label m
            ) => DFA t -> ThawT r t m (NFA r t)
-fromDFA = fix $ \ recur x -> gets (Map.lookup x) >>= \ case
-  Just y -> pure y
-  Nothing -> mfix $ \ y ->
-    modify (Map.insert x y) >>
-    NFA <$> supply <*> getNFATrans x <*> newRef mempty <*> getNFAFlow x
-    where
-      getNFATrans = newRef <=< traverse (fmap Set.singleton . recur) . (.trans)
-      getNFAFlow = newRef <=< Set.traverse recur . (.flow)
+fromDFA x =
+  gets (Map.lookup x) >>=
+  (flip maybe pure $ mfix $ \ y ->
+      modify (Map.insert x y) >>
+      NFA <$> supply <*> getTrans x <*> getFlow x)
+  where
+    getTrans = newRef <=< traverse (fmap Set.singleton . fromDFA) . (.trans)
+    getFlow = newRef <=< Set.traverse fromDFA . (.flow)
 
 foldMapM :: (Foldable t, Monad m, Monoid b) => (a -> m b) -> t a -> m b
 foldMapM = foldMapM' mappend mempty
@@ -179,6 +163,4 @@ lookupMany :: (Ord k, Ord a) => Set k -> MultiMap k a -> Set a
 lookupMany xs = fold . flip Map.restrictKeys xs . coerce
 
 fromSet :: Set k -> a -> MultiMap k a
-fromSet xs y = MultiMap $ Map.fromSet (const ys) xs
-  where
-    ys = Set.singleton y
+fromSet xs y = MultiMap $ Map.fromSet (const (Set.singleton y)) xs

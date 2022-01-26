@@ -6,6 +6,8 @@
 module Unify
   ( MonadUnifyError (..)
   , unify
+  , mergeNeg
+  , mergePos
   ) where
 
 import Control.Monad

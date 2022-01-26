@@ -69,18 +69,16 @@ infer = \ case
       modify $ Map.insert x (Poly t)
       thaw t
     Nothing -> mdo
-      t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
-      t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
+      (t_neg, t_pos) <- freshVar
       pure (Map.singleton x t_neg, t_pos)
   Abs xs e ->
     inferAbs xs e
   App e1 e2 -> mdo
     (env_e1, t_e1) <- infer e1
     (env_e2, t_e2) <- infer e2
-    t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
-    t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
+    (t_neg, t_pos) <- freshVar
     unify' t_e1 =<< freshFn t_e2 t_neg
-    (, t_pos) <$> union env_e1 env_e2
+    (, t_pos) <$> unionEnv env_e1 env_e2
   Val x e1 e2 -> do
     t_e1 <- freeze =<< infer e1
     local (Map.insert x (Poly t_e1)) $ infer e2
@@ -104,7 +102,7 @@ infer = \ case
   Seq e1 e2 -> do
     (env_e1, _) <- infer e1
     (env_e2, t_e2) <- infer e2
-    (, t_e2) <$> union env_e1 env_e2
+    (, t_e2) <$> unionEnv env_e1 env_e2
   Block e -> do
     (env, t_e) <- infer e
     t_x <- freshVoid
@@ -112,12 +110,11 @@ infer = \ case
   Exp.Struct x xs -> do
     (env, xs) <- forAccumLM mempty xs $ \ env (i, e) -> do
       (env_e, t_e) <- infer e
-      (, (i, Set.singleton t_e)) <$> union env env_e
+      (, (i, Set.singleton t_e)) <$> unionEnv env env_e
     (env,) <$> freshStruct x xs
   Field e i -> mdo
     (env_e, t_e) <- infer e
-    t_neg <- newNFA State.empty mempty (Set.singleton t_pos)
-    t_pos <- newNFA State.empty mempty (Set.singleton t_neg)
+    (t_neg, t_pos) <- freshVar
     unify' t_e =<< freshField i t_neg
     pure (env_e, t_pos)
   Switch e@(Var v) x xs y -> do
@@ -128,13 +125,13 @@ infer = \ case
       pure (env_e, t_e, [(i, Just (Set.singleton t_i))])
     (env_xs, t_xs, t_i) <- rotateL foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e, t_i) <- inferVarCase v i e
-      (,, (i, Just (Set.singleton t_i)):z) <$> union env_xs env_e <*> append t_xs t_e
+      (,, (i, Just (Set.singleton t_i)):z) <$> unionEnv env_xs env_e <*> union t_xs t_e
     (env_y, t_y, t_def) <- funzip3 <$> traverse (inferVarDefault v (fst <$> t_i)) y
     t_e_neg <- freshUnion t_i t_def
     unify' t_e_pos t_e_neg
     (,) <$>
-      (maybe pure (flip union) env_y =<< union env_e env_xs) <*>
-      maybe pure (flip append) t_y t_xs
+      (maybe pure (flip unionEnv) env_y =<< unionEnv env_e env_xs) <*>
+      maybe pure (flip union) t_y t_xs
   Switch e x xs y -> do
     (env_e, t_e_pos) <- infer e
     z <- do
@@ -145,13 +142,13 @@ infer = \ case
     (env_xs, t_xs, t_i) <- rotateL foldlM z xs $ \ (env_xs, t_xs, z) (i, e) -> do
       (env_e, t_e) <- infer e
       t_i <- fresh State.empty
-      (,, (i, Just (Set.singleton t_i)):z) <$> union env_xs env_e <*> append t_xs t_e
+      (,, (i, Just (Set.singleton t_i)):z) <$> unionEnv env_xs env_e <*> union t_xs t_e
     (env_def, t_y) <- funzip <$> traverse infer y
     t_e_neg <- freshUnion t_i . Just =<< fresh State.empty
     unify' t_e_pos t_e_neg
     (,) <$>
-      (maybe pure (flip union) env_def =<< union env_e env_xs) <*>
-      maybe pure (flip append) t_y t_xs
+      (maybe pure (flip unionEnv) env_def =<< unionEnv env_e env_xs) <*>
+      maybe pure (flip union) t_y t_xs
   Enum i ->
     (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
   Exp.Void ->
@@ -186,8 +183,7 @@ inferVarCase v i e = do
   (env_e, t_e) <- local (Map.delete v) $ infer e
   case Map.lookup v env_e of
     Just t_neg -> mdo
-      t_i_neg <- newNFA State.empty mempty (Set.singleton t_i_pos)
-      t_i_pos <- newNFA State.empty mempty (Set.singleton t_i_neg)
+      (t_i_neg, t_i_pos) <- freshVar
       t_pos <- freshCase i t_i_pos
       unify' t_pos t_neg
       pure (Map.delete v env_e, t_e, t_i_neg)
@@ -206,8 +202,7 @@ inferVarDefault v i e = do
   (env_e, t_e) <- local (Map.delete v) $ infer e
   case Map.lookup v env_e of
     Just t_neg -> mdo
-      t_i_neg <- newNFA State.empty mempty (Set.singleton t_i_pos)
-      t_i_pos <- newNFA State.empty mempty (Set.singleton t_i_neg)
+      (t_i_neg, t_i_pos) <- freshVar
       t_pos <- freshDefault i t_i_pos
       unify' t_pos t_neg
       pure (Map.delete v env_e, t_e, t_i_neg)
@@ -257,26 +252,40 @@ forAccumLM s t f = coerce (traverse @t @(StateL b f) @a @c) (flip f) t s
 infer' :: Ord a => Exp a -> Either Error (Poly a)
 infer' e = runST (runSupplyT (evalStateT (runExceptT (infer e >>= freeze)) mempty))
 
-union :: ( Ord a
-         , State.Map t
+unionEnv :: ( Ord a
+            , State.Map t
+            , MonadRef r m
+            , MonadSupply Label m
+            ) => Map a (NFA r t) -> Map a (NFA r t) -> m (Map a (NFA r t))
+unionEnv =
+  Map.mergeA Map.preserveMissing Map.preserveMissing $
+  Map.zipWithAMatched $ const intersection
+
+intersection :: ( State.Map t
+                , MonadRef r m
+                , MonadSupply Label m
+                ) => NFA r t -> NFA r t -> m (NFA r t)
+intersection x y = do
+  z <- fresh State.empty
+  mergeNeg z x
+  mergeNeg z y
+  pure z
+
+union :: ( State.Map t
          , MonadRef r m
          , MonadSupply Label m
-         ) => Map a (NFA r t) -> Map a (NFA r t) -> m (Map a (NFA r t))
-union =
-  Map.mergeA Map.preserveMissing Map.preserveMissing $
-  Map.zipWithAMatched $ const append
-
-append :: ( State.Map t
-          , MonadRef r m
-          , MonadSupply Label m
-          ) => NFA r t -> NFA r t -> m (NFA r t)
-append x y = newNFA State.empty (Set.fromList [x, y]) mempty
+         ) => NFA r t -> NFA r t -> m (NFA r t)
+union x y = do
+  z <- fresh State.empty
+  mergePos z x
+  mergePos z y
+  pure z
 
 fresh :: ( State.Map t
          , MonadRef r m
          , MonadSupply Label m
          ) => t (Set (NFA r t)) -> m (NFA r t)
-fresh x = newNFA x mempty mempty
+fresh x = newNFA x mempty
 
 freshFn :: ( MonadRef r m
            , MonadSupply Label m
@@ -327,6 +336,16 @@ freshVoid :: ( MonadRef r m
 freshVoid =
   freshAll =<< fresh (State.singleton Head.Void)
 
+freshVar :: ( State.Map t
+            , MonadFix m
+            , MonadRef r m
+            , MonadSupply Label m
+            ) => m (NFA r t, NFA r t)
+freshVar = mdo
+  t_neg <- newNFA State.empty (Set.singleton t_pos)
+  t_pos <- newNFA State.empty (Set.singleton t_neg)
+  pure (t_neg, t_pos)
+
 freeze :: ( MonadFix m
           , MonadRef r m
           ) => MPoly a r -> m (Poly a)
@@ -340,9 +359,9 @@ thaw (env, t) = evalThawT $ (,) <$> traverse fromDFA env <*> fromDFA t
 
 newNFA :: ( MonadRef r m
           , MonadSupply Label m
-          ) => t (Set (NFA r t)) -> Set (NFA r t) -> Set (NFA r t) -> m (NFA r t)
-newNFA trans epsilonTrans flow =
-  NFA <$> supply <*> newRef trans <*> newRef epsilonTrans <*> newRef flow
+          ) => t (Set (NFA r t)) -> Set (NFA r t) -> m (NFA r t)
+newNFA trans flow =
+  NFA <$> supply <*> newRef trans <*> newRef flow
 
 local :: MonadState s m => (s -> s) -> m a -> m a
 local f m = do
