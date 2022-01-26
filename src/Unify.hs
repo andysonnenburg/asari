@@ -22,7 +22,7 @@ import Set (Set)
 import Set qualified
 import State qualified
 
-class Monad m => MonadUnifyError s m where
+class (State.Map s, Monad m) => MonadUnifyError s m where
   throwUnifyError :: s a -> s a -> m b
 
 instance MonadUnifyError s m => MonadUnifyError s (StateT s' m) where

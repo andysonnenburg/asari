@@ -10,8 +10,10 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module Infer
@@ -257,6 +259,7 @@ infer' e = runST (runSupplyT (evalStateT (runExceptT (infer e >>= freeze)) mempt
 unionEnv' :: ( Ord a
              , State.Map s
              , Foldable t
+             , MonadFix m
              , MonadRef r m
              , MonadSupply Label m
              ) => t (Map a (NFA r s)) -> m (Map a (NFA r s))
@@ -264,6 +267,7 @@ unionEnv' = foldlM unionEnv mempty
 
 unionEnv :: ( Ord a
             , State.Map s
+            , MonadFix m
             , MonadRef r m
             , MonadSupply Label m
             ) => Map a (NFA r s) -> Map a (NFA r s) -> m (Map a (NFA r s))
@@ -272,31 +276,38 @@ unionEnv =
   Map.zipWithAMatched $ const intersection
 
 intersection :: ( State.Map s
+                , MonadFix m
                 , MonadRef r m
                 , MonadSupply Label m
                 ) => NFA r s -> NFA r s -> m (NFA r s)
-intersection x y = do
-  z <- fresh State.empty
-  mergeNeg z x
-  mergeNeg z y
-  pure z
+intersection x_neg y_neg = do
+  (z_neg, z_pos) <- freshVar
+  mergeNeg z_neg x_neg
+  readRef x_neg.flow >>= traverse_ (flip mergePos z_pos)
+  mergeNeg z_neg y_neg
+  readRef y_neg.flow >>= traverse_ (flip mergePos z_pos)
+  pure z_neg
 
 union' :: ( State.Map s
           , Foldable1 t
+          , MonadFix m
           , MonadRef r m
           , MonadSupply Label m
           ) => t (NFA r s) -> m (NFA r s)
 union' = foldlM1 union
 
 union :: ( State.Map s
+         , MonadFix m
          , MonadRef r m
          , MonadSupply Label m
          ) => NFA r s -> NFA r s -> m (NFA r s)
-union x y = do
-  z <- fresh State.empty
-  mergePos z x
-  mergePos z y
-  pure z
+union x_pos y_pos = do
+  (z_neg, z_pos) <- freshVar
+  readRef x_pos.flow >>= traverse_ (flip mergeNeg z_neg)
+  mergePos z_pos x_pos
+  readRef y_pos.flow >>= traverse_ (flip mergeNeg z_neg)
+  mergePos z_pos y_pos
+  pure z_pos
 
 fresh :: ( State.Map s
          , MonadRef r m
