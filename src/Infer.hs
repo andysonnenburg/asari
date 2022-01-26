@@ -22,13 +22,12 @@ import Control.Arrow (first)
 import Control.Monad.Except
 import Control.Monad.State.Strict
 import Control.Monad.ST
+import Data.Bifunctor.Join
 import Data.Coerce
 import Data.Foldable
 import Data.Functor qualified as Functor
 import Data.Functor.Product
-import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Merge.Lazy qualified as Map
-import Data.Maybe (maybeToList)
 import Data.Semigroup.Foldable
 
 import Error
@@ -133,7 +132,7 @@ infer = \ case
     (env_y, t_y, t_def) <- funzip3 <$> traverse (inferVarDefault v (fst <$> t_i)) y
     t_e_neg <- freshUnion t_i t_def
     unify' t_e_pos t_e_neg
-    (,) <$> unionEnv' (Pair (Two env_e env_xs) env_y) <*> union' (Maybe1 t_xs t_y)
+    (,) <$> unionEnv' (Pair (Join (env_e, env_xs)) env_y) <*> union' (t_xs :| t_y)
   Switch e x xs y -> do
     (env_e, t_e_pos) <- infer e
     z <- do
@@ -148,7 +147,7 @@ infer = \ case
     (env_y, t_y) <- funzip <$> traverse infer y
     t_e_neg <- freshUnion t_i . Just =<< fresh State.empty
     unify' t_e_pos t_e_neg
-    (,) <$> unionEnv' (Pair (Two env_e env_xs) env_y) <*> union' (Maybe1 t_xs t_y)
+    (,) <$> unionEnv' (Pair (Join (env_e, env_xs)) env_y) <*> union' (t_xs :| t_y)
   Enum i ->
     (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
   Exp.Void ->
@@ -410,15 +409,7 @@ rotateL f b c a = f a b c
 rotateR :: (a -> b -> c -> d) -> c -> a -> b -> d
 rotateR f c a b = f a b c
 
-data Maybe1 a = Maybe1 a (Maybe a) deriving (Functor, Foldable, Traversable)
+data NonEmptyF f a = a :| f a deriving (Functor, Foldable, Traversable)
 
-instance Foldable1 Maybe1 where
-  fold1 = \ case
-    Maybe1 x Nothing -> x
-    Maybe1 x (Just y) -> x <> y
-  foldMap1 f = \ case
-    Maybe1 x Nothing -> f x
-    Maybe1 x (Just y) -> f x <> f y
-  toNonEmpty (Maybe1 x y) = x :| maybeToList y
-
-data Two a = Two a a deriving (Functor, Foldable, Traversable)
+instance Foldable f => Foldable1 (NonEmptyF f) where
+  foldMap1 f (x :| xs) = foldl' ((. f) . (<>)) (f x) xs
