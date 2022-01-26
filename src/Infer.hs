@@ -6,6 +6,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ImportQualifiedPost #-}
@@ -27,7 +28,9 @@ import Data.Coerce
 import Data.Foldable
 import Data.Functor qualified as Functor
 import Data.Functor.Product
+import Data.Functor.Reverse
 import Data.Map.Merge.Lazy qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Semigroup.Foldable
 
 import Error
@@ -53,7 +56,7 @@ type MMono r = NFA r HeadMap
 type MPoly a r = (Map a (MMono r), MMono r)
 
 data VarState a
-  = Exp [a] (Exp a)
+  = Abs [a] (Exp a)
   | Poly (Poly a)
 
 infer :: ( Ord a
@@ -66,10 +69,10 @@ infer :: ( Ord a
 infer = \ case
   Var x -> Map.lookup x <$> get >>= \ case
     Just (Poly t) -> thaw t
-    Just (Exp xs e) -> do
+    Just (Abs xs e) -> do
       modify $ Map.delete x
-      t@(env, t_pos) <- inferAbs xs e
-      t <- rotateR maybe (Map.lookup x env) (freeze t) $ \ t_neg -> do
+      t_abs@(env, t_pos) <- inferAbs xs e
+      t <- rotateR maybe (Map.lookup x env) (freeze t_abs) $ \ t_neg -> do
         unify' t_pos t_neg
         freeze (Map.delete x env, t_pos)
       modify $ Map.insert x (Poly t)
@@ -77,7 +80,7 @@ infer = \ case
     Nothing -> mdo
       (t_neg, t_pos) <- freshVar
       pure (Map.singleton x t_neg, t_pos)
-  Abs xs e ->
+  Lam xs e ->
     inferAbs xs e
   App e1 e2 -> mdo
     (env_e1, t_e1) <- infer e1
@@ -89,12 +92,12 @@ infer = \ case
     t_e1 <- freeze =<< infer e1
     local (Map.insert x (Poly t_e1)) $ infer e2
   Exp.Fn x xs e1 e2 -> local' $ do
-    for_ (y:ys) $ \ (x, xs, e1) ->
-      modify $ Map.insert x (Exp xs e1)
-    for_ (reverse (y:ys)) $ \ (x, xs, e1) -> do
+    for_ (y:|ys) $ \ (x, xs, e1) ->
+      modify $ Map.insert x (Abs xs e1)
+    for_ (Reverse (y:|ys)) $ \ (x, xs, e1) -> do
       modify $ Map.delete x
-      t@(env, t_pos) <- inferAbs xs e1
-      t <- rotateR maybe (Map.lookup x env) (freeze t) $ \ t_neg -> do
+      t_abs@(env, t_pos) <- inferAbs xs e1
+      t <- rotateR maybe (Map.lookup x env) (freeze t_abs) $ \ t_neg -> do
         unify' t_pos t_neg
         freeze (Map.delete x env, t_pos)
       modify $ Map.insert x (Poly t)
@@ -305,13 +308,13 @@ freshFn :: ( MonadRef r m
            , MonadSupply Label m
            ) => MMono r -> MMono r -> m (MMono r)
 freshFn x y =
-  freshAll =<< fresh (State.singleton (Head.Fn (Set.singleton x) (Set.singleton y)))
+  freshCase "fn" =<< fresh (State.singleton (Head.Fn (Set.singleton x) (Set.singleton y)))
 
 freshStruct :: ( MonadRef r m
                , MonadSupply Label m
                ) => Maybe Name -> [(Name, Set (MMono r))] -> m (MMono r)
 freshStruct x =
-  (maybe freshAll freshCase x =<<) . fresh . State.singleton . Head.Struct . Map.fromList
+  freshCase (fromMaybe "struct" x) <=< fresh . State.singleton . Head.Struct . Map.fromList
 
 freshField :: ( MonadRef r m
               , MonadSupply Label m
@@ -348,7 +351,7 @@ freshVoid :: ( MonadRef r m
              , MonadSupply Label m
              ) => m (MMono r)
 freshVoid =
-  freshAll =<< fresh (State.singleton Head.Void)
+  freshCase "void" =<< fresh (State.singleton Head.Void)
 
 freshVar :: ( State.Map s
             , MonadFix m

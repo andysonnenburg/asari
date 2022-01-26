@@ -6,7 +6,7 @@ import Name
 
 data Exp a
   = Var a
-  | Abs [a] (Exp a)
+  | Lam [a] (Exp a)
   | App (Exp a) (Exp a)
   | Val a (Exp a) (Exp a)
   | Fn a [a] (Exp a) (Exp a)

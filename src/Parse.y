@@ -59,7 +59,7 @@ FieldName : Exp { $1 }
           | FieldName '.' name { Field $1 $3 }
 
 Exp : name { Exp.Var $1 }
-    | '\\' Names '{' Void '}' { Abs $2 $4 }
+    | '\\' Names '{' Void '}' { Lam $2 $4 }
     | '(' Void ')' { $2 }
     | struct MaybeName '{' Fields '}' { Exp.Struct $2 $4 }
     | switch App '{' Case Cases MaybeDefault '}' { Exp.Switch $2 $4 $5 $6 }
