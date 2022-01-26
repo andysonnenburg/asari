@@ -22,25 +22,25 @@ import Set (Set)
 import Set qualified
 import State qualified
 
-class Monad m => MonadUnifyError t m where
-  throwUnifyError :: t a -> t a -> m b
+class Monad m => MonadUnifyError s m where
+  throwUnifyError :: s a -> s a -> m b
 
-instance MonadUnifyError t m => MonadUnifyError t (StateT s m) where
+instance MonadUnifyError s m => MonadUnifyError s (StateT s' m) where
   throwUnifyError x y = lift $ throwUnifyError x y
 
-unify :: ( State.Map t
-         , MonadUnifyError t m
+unify :: ( State.Map s
+         , MonadUnifyError s m
          , MonadFix m
          , MonadRef r m
-         ) => NFA r t -> NFA r t -> m ()
+         ) => NFA r s -> NFA r s -> m ()
 unify x y = evalStateT (unify' x y) mempty
 
-unify' :: ( State.Map t
-          , MonadUnifyError t m
+unify' :: ( State.Map s
+          , MonadUnifyError s m
           , MonadFix m
           , MonadRef r m
-          , MonadState (Set (NFA r t, NFA r t)) m
-          ) => NFA r t -> NFA r t -> m ()
+          , MonadState (Set (NFA r s, NFA r s)) m
+          ) => NFA r s -> NFA r s -> m ()
 unify' = fix $ \ recur x y -> unlessM (gets (Set.member (x, y))) $ do
   modify $ Set.insert (x, y)
   unlessM (State.isSubmapOf <$> readRef y.trans <*> readRef x.trans) $
@@ -50,12 +50,12 @@ unify' = fix $ \ recur x y -> unlessM (gets (Set.member (x, y))) $ do
   let f xs ys = sequence $ recur <$> toList xs <*> toList ys
   join $ State.bizipWithM_ (flip f) f <$> readRef x.trans <*> readRef y.trans
 
-mergeNeg :: (State.Map t, MonadRef r m) => NFA r t -> NFA r t -> m ()
+mergeNeg :: (State.Map s, MonadRef r m) => NFA r s -> NFA r s -> m ()
 mergeNeg x y = do
   writeRef x.trans =<< State.intersectionWith (<>) <$> readRef y.trans <*> readRef x.trans
   writeRef x.flow =<< (<>) <$> readRef x.flow <*> readRef y.flow
 
-mergePos :: (State.Map t, MonadRef r m) => NFA r t -> NFA r t -> m ()
+mergePos :: (State.Map s, MonadRef r m) => NFA r s -> NFA r s -> m ()
 mergePos x y = do
   writeRef x.trans =<< State.unionWith (<>) <$> readRef y.trans <*> readRef x.trans
   writeRef x.flow =<< (<>) <$> readRef x.flow <*> readRef y.flow

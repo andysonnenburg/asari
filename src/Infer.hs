@@ -1,9 +1,12 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecursiveDo #-}
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE DeriveFoldable #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -22,7 +25,11 @@ import Control.Monad.ST
 import Data.Coerce
 import Data.Foldable
 import Data.Functor qualified as Functor
+import Data.Functor.Product
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map.Merge.Lazy qualified as Map
+import Data.Maybe (maybeToList)
+import Data.Semigroup.Foldable
 
 import Error
 import Exp as Exp
@@ -126,9 +133,7 @@ infer = \ case
     (env_y, t_y, t_def) <- funzip3 <$> traverse (inferVarDefault v (fst <$> t_i)) y
     t_e_neg <- freshUnion t_i t_def
     unify' t_e_pos t_e_neg
-    (,) <$>
-      (maybe pure (flip unionEnv) env_y =<< unionEnv env_e env_xs) <*>
-      maybe pure (flip union) t_y t_xs
+    (,) <$> unionEnv' (Pair (Two env_e env_xs) env_y) <*> union' (Maybe1 t_xs t_y)
   Switch e x xs y -> do
     (env_e, t_e_pos) <- infer e
     z <- do
@@ -140,12 +145,10 @@ infer = \ case
       (env_e, t_e) <- infer e
       t_i <- fresh State.empty
       (,, (i, Just (Set.singleton t_i)):z) <$> unionEnv env_xs env_e <*> union t_xs t_e
-    (env_def, t_y) <- funzip <$> traverse infer y
+    (env_y, t_y) <- funzip <$> traverse infer y
     t_e_neg <- freshUnion t_i . Just =<< fresh State.empty
     unify' t_e_pos t_e_neg
-    (,) <$>
-      (maybe pure (flip unionEnv) env_def =<< unionEnv env_e env_xs) <*>
-      maybe pure (flip union) t_y t_xs
+    (,) <$> unionEnv' (Pair (Two env_e env_xs) env_y) <*> union' (Maybe1 t_xs t_y)
   Enum i ->
     (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
   Exp.Void ->
@@ -249,39 +252,54 @@ forAccumLM s t f = coerce (traverse @t @(StateL b f) @a @c) (flip f) t s
 infer' :: Ord a => Exp a -> Either Error (Poly a)
 infer' e = runST (runSupplyT (evalStateT (runExceptT (infer e >>= freeze)) mempty))
 
+unionEnv' :: ( Ord a
+             , State.Map s
+             , Foldable t
+             , MonadRef r m
+             , MonadSupply Label m
+             ) => t (Map a (NFA r s)) -> m (Map a (NFA r s))
+unionEnv' = foldlM unionEnv mempty
+
 unionEnv :: ( Ord a
-            , State.Map t
+            , State.Map s
             , MonadRef r m
             , MonadSupply Label m
-            ) => Map a (NFA r t) -> Map a (NFA r t) -> m (Map a (NFA r t))
+            ) => Map a (NFA r s) -> Map a (NFA r s) -> m (Map a (NFA r s))
 unionEnv =
   Map.mergeA Map.preserveMissing Map.preserveMissing $
   Map.zipWithAMatched $ const intersection
 
-intersection :: ( State.Map t
+intersection :: ( State.Map s
                 , MonadRef r m
                 , MonadSupply Label m
-                ) => NFA r t -> NFA r t -> m (NFA r t)
+                ) => NFA r s -> NFA r s -> m (NFA r s)
 intersection x y = do
   z <- fresh State.empty
   mergeNeg z x
   mergeNeg z y
   pure z
 
-union :: ( State.Map t
+union' :: ( State.Map s
+          , Foldable1 t
+          , MonadRef r m
+          , MonadSupply Label m
+          ) => t (NFA r s) -> m (NFA r s)
+union' = foldlM1 union
+
+union :: ( State.Map s
          , MonadRef r m
          , MonadSupply Label m
-         ) => NFA r t -> NFA r t -> m (NFA r t)
+         ) => NFA r s -> NFA r s -> m (NFA r s)
 union x y = do
   z <- fresh State.empty
   mergePos z x
   mergePos z y
   pure z
 
-fresh :: ( State.Map t
+fresh :: ( State.Map s
          , MonadRef r m
          , MonadSupply Label m
-         ) => t (Set (NFA r t)) -> m (NFA r t)
+         ) => s (Set (NFA r s)) -> m (NFA r s)
 fresh x = newNFA x mempty
 
 freshFn :: ( MonadRef r m
@@ -333,11 +351,11 @@ freshVoid :: ( MonadRef r m
 freshVoid =
   freshAll =<< fresh (State.singleton Head.Void)
 
-freshVar :: ( State.Map t
+freshVar :: ( State.Map s
             , MonadFix m
             , MonadRef r m
             , MonadSupply Label m
-            ) => m (NFA r t, NFA r t)
+            ) => m (NFA r s, NFA r s)
 freshVar = mdo
   t_neg <- newNFA State.empty (Set.singleton t_pos)
   t_pos <- newNFA State.empty (Set.singleton t_neg)
@@ -356,7 +374,7 @@ thaw (env, t) = evalThawT $ (,) <$> traverse fromDFA env <*> fromDFA t
 
 newNFA :: ( MonadRef r m
           , MonadSupply Label m
-          ) => t (Set (NFA r t)) -> Set (NFA r t) -> m (NFA r t)
+          ) => s (Set (NFA r s)) -> Set (NFA r s) -> m (NFA r s)
 newNFA trans flow =
   NFA <$> supply <*> newRef trans <*> newRef flow
 
@@ -391,3 +409,16 @@ rotateL f b c a = f a b c
 
 rotateR :: (a -> b -> c -> d) -> c -> a -> b -> d
 rotateR f c a b = f a b c
+
+data Maybe1 a = Maybe1 a (Maybe a) deriving (Functor, Foldable, Traversable)
+
+instance Foldable1 Maybe1 where
+  fold1 = \ case
+    Maybe1 x Nothing -> x
+    Maybe1 x (Just y) -> x <> y
+  foldMap1 f = \ case
+    Maybe1 x Nothing -> f x
+    Maybe1 x (Just y) -> f x <> f y
+  toNonEmpty (Maybe1 x y) = x :| maybeToList y
+
+data Two a = Two a a deriving (Functor, Foldable, Traversable)

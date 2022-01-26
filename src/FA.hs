@@ -35,48 +35,48 @@ import Supply
 
 type Label = Word
 
-data NFA r t = NFA
+data NFA r s = NFA
   { label :: Label
-  , trans :: r (t (Set (NFA r t)))
-  , flow :: r (Set (NFA r t))
+  , trans :: r (s (Set (NFA r s)))
+  , flow :: r (Set (NFA r s))
   }
 
-instance Eq (NFA r t) where
+instance Eq (NFA r s) where
   x == y = getField @"label" x == getField @"label" y
 
-instance Ord (NFA r t) where
+instance Ord (NFA r s) where
   compare = comparing $ getField @"label"
 
-data DFA t = DFA
+data DFA s = DFA
   { label :: Label
-  , trans :: t (DFA t)
-  , flow :: Set (DFA t)
+  , trans :: s (DFA s)
+  , flow :: Set (DFA s)
   }
 
-instance Eq (DFA t) where
+instance Eq (DFA s) where
   x == y = getField @"label" x == getField @"label" y
 
-instance Ord (DFA t) where
+instance Ord (DFA s) where
   compare = comparing $ getField @"label"
 
-type FreezeT r t m =
+type FreezeT r s m =
   FixT
-  (MultiMap (NFA r t) (DFA t))
-  (StateT (Map (Set (NFA r t)) (DFA t)) (SupplyT Label m))
+  (MultiMap (NFA r s) (DFA s))
+  (StateT (Map (Set (NFA r s)) (DFA s)) (SupplyT Label m))
 
 evalFreezeT :: MonadFix m => FreezeT r t m a -> m a
 evalFreezeT m = runSupplyT (evalStateT (evalFixT m) mempty)
 
-fromNegNFA :: ( State.Map t
+fromNegNFA :: ( State.Map s
               , MonadFix m
               , MonadRef r m
-              ) => NFA r t -> FreezeT r t m (DFA t)
+              ) => NFA r s -> FreezeT r s m (DFA s)
 fromNegNFA = fromNegNFA' . Set.singleton
 
-fromNegNFA' :: ( State.Map t
+fromNegNFA' :: ( State.Map s
                , MonadFix m
                , MonadRef r m
-               ) => Set (NFA r t) -> FreezeT r t m (DFA t)
+               ) => Set (NFA r s) -> FreezeT r s m (DFA s)
 fromNegNFA' xs =
   gets (Map.lookup xs) >>=
   (flip maybe pure $ mfix $ \ y ->
@@ -89,16 +89,16 @@ fromNegNFA' xs =
     append =
       State.intersectionWith (<>)
 
-fromPosNFA :: ( State.Map t
+fromPosNFA :: ( State.Map s
               , MonadFix m
               , MonadRef r m
-              ) => NFA r t -> FreezeT r t m (DFA t)
+              ) => NFA r s -> FreezeT r s m (DFA s)
 fromPosNFA = fromPosNFA' . Set.singleton
 
-fromPosNFA' :: ( State.Map t
+fromPosNFA' :: ( State.Map s
                , MonadFix m
                , MonadRef r m
-               ) => Set (NFA r t) -> FreezeT r t m (DFA t)
+               ) => Set (NFA r s) -> FreezeT r s m (DFA s)
 fromPosNFA' xs =
   gets (Map.lookup xs) >>=
   (flip maybe pure $ mfix $ \ y ->
@@ -111,26 +111,26 @@ fromPosNFA' xs =
     append =
       State.unionWith (<>)
 
-putDFA :: ( MonadState (Map (Set (NFA r t)) (DFA t)) m
-          , MonadWriter (MultiMap (NFA r t) (DFA t)) m
-          ) => Set (NFA r t) -> DFA t -> m ()
+putDFA :: ( MonadState (Map (Set (NFA r s)) (DFA s)) m
+          , MonadWriter (MultiMap (NFA r s) (DFA s)) m
+          ) => Set (NFA r s) -> DFA s -> m ()
 putDFA xs y = modify (Map.insert xs y) >> tell (fromSet xs y)
 
-getDFAFlow :: ( MonadReader (MultiMap (NFA r t) (DFA t)) m
+getDFAFlow :: ( MonadReader (MultiMap (NFA r s) (DFA s)) m
               , MonadRef r m
-              ) => Set (NFA r t) -> m (Set (DFA t))
+              ) => Set (NFA r s) -> m (Set (DFA s))
 getDFAFlow = foldMapM (\ x -> lookupMany <$> readRef x.flow <*> ask)
 
-type ThawT r t = StateT (Map (DFA t) (NFA r t))
+type ThawT r s = StateT (Map (DFA s) (NFA r s))
 
 evalThawT :: Monad m => ThawT r t m a -> m a
 evalThawT m = evalStateT m mempty
 
-fromDFA :: ( Traversable t
+fromDFA :: ( Traversable s
            , MonadFix m
            , MonadRef r m
            , MonadSupply Label m
-           ) => DFA t -> ThawT r t m (NFA r t)
+           ) => DFA s -> ThawT r s m (NFA r s)
 fromDFA x =
   gets (Map.lookup x) >>=
   (flip maybe pure $ mfix $ \ y ->
