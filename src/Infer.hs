@@ -34,6 +34,7 @@ import Data.Functor.Product
 import Data.Map.Merge.Lazy qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Semigroup.Foldable
+import Data.Traversable
 
 import Error
 import Exp as Exp
@@ -155,10 +156,10 @@ inferVar :: ( Ord a
 inferVar x s = readRef s >>= \ case
   Abs env xs e -> do
     writeRef s Mono
-    t@(t_env, t_pos) <- local (const env) $ inferAbs xs e
-    t <- rotateR maybe (Map.lookup x t_env) (freeze t) $ \ t_neg -> do
+    t@(env, t_pos) <- local (const env) $ inferAbs xs e
+    t <- rotateR maybe (Map.lookup x env) (freeze t) $ \ t_neg -> do
       unify' t_pos t_neg
-      freeze (Map.delete x t_env, t_pos)
+      freeze (Map.delete x env, t_pos)
     writeRef s $ Poly t
     thaw t
   Mono -> inferMonoVar x
@@ -215,17 +216,27 @@ inferVarCase :: ( Ord a
                 , MonadRef r m
                 , MonadSupply Label m
                 ) => a -> Name -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
-inferVarCase x i e = do
-  (env_e, t_e) <- local (Map.delete x) $ infer e
-  case Map.lookup x env_e of
-    Just t_neg -> do
-      (t_i_neg, t_i_pos) <- freshVar
-      t_pos <- freshCase i t_i_pos
-      unify' t_pos t_neg
-      pure (Map.delete x env_e, t_e, t_i_neg)
-    Nothing -> do
-      t_i_neg <- fresh State.empty
-      pure (env_e, t_e, t_i_neg)
+inferVarCase x i e = asks (Map.lookup x) >>= \ case
+  Just s_x -> do
+    (env_x, t_x_pos) <- inferVar x s_x
+    (t_i_neg, t_i_pos) <- freshVar
+    t_neg <- freshUnion [(i, Just (Set.singleton t_i_neg))] . Just =<< fresh State.empty
+    unify' t_x_pos t_neg
+    t_x_pos <- freshCase i t_i_pos
+    s_x <- newRef . Poly =<< freeze (env_x, t_x_pos)
+    (env_e, t_e_pos) <- local (Map.insert x s_x) $ infer e
+    pure (env_e, t_e_pos, t_i_neg)
+  Nothing -> do
+    (env_e, t_e_pos) <- infer e
+    case Map.lookup x env_e of
+      Just t_x_neg -> do
+        (t_i_neg, t_i_pos) <- freshVar
+        t_x_pos <- freshCase i t_i_pos
+        unify' t_x_pos t_x_neg
+        pure (Map.delete x env_e, t_e_pos, t_i_neg)
+      Nothing -> do
+        t_i_neg <- fresh State.empty
+        pure (env_e, t_e_pos, t_i_neg)
 
 inferVarDefault :: ( Ord a
                    , MonadError Error m
@@ -234,17 +245,30 @@ inferVarDefault :: ( Ord a
                    , MonadRef r m
                    , MonadSupply Label m
                    ) => a -> [Name] -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
-inferVarDefault x i e = do
-  (env_e, t_e) <- local (Map.delete x) $ infer e
-  case Map.lookup x env_e of
-    Just t_neg -> do
-      (t_i_neg, t_i_pos) <- freshVar
-      t_pos <- freshDefault i t_i_pos
-      unify' t_pos t_neg
-      pure (Map.delete x env_e, t_e, t_i_neg)
-    Nothing -> do
-      t_i_neg <- fresh State.empty
-      pure (env_e, t_e, t_i_neg)
+inferVarDefault x i e = asks (Map.lookup x) >>= \ case
+  Just s_x -> do
+    (env_x, t_x_pos) <- inferVar x s_x
+    t_i <- for i $ \ i -> do
+      t_i <- fresh State.empty
+      pure (i, Just (Set.singleton t_i))
+    (t_def_neg, t_def_pos) <- freshVar
+    t_neg <- freshUnion t_i (Just t_def_neg)
+    unify' t_x_pos t_neg
+    t_x_pos <- freshDefault i t_def_pos
+    s_x <- newRef . Poly =<< freeze (env_x, t_x_pos)
+    (env_e, t_e_pos) <- local (Map.insert x s_x) $ infer e
+    pure (env_e, t_e_pos, t_def_neg)
+  Nothing -> do
+    (env_e, t_e_pos) <- infer e
+    case Map.lookup x env_e of
+      Just t_x_neg -> do
+        (t_def_neg, t_def_pos) <- freshVar
+        t_x_pos <- freshDefault i t_def_pos
+        unify' t_x_pos t_x_neg
+        pure (Map.delete x env_e, t_e_pos, t_def_neg)
+      Nothing -> do
+        t_def_neg <- fresh State.empty
+        pure (env_e, t_e_pos, t_def_neg)
 
 newtype UnifyErrorT m a =
   UnifyErrorT { runUnifyErrorT :: m a
