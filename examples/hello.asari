@@ -1,5 +1,7 @@
 fn if p x e y {
-  switch e { case else: }
+  switch e {
+    case else:
+  };
   switch p {
     case true: x ()
     case false: y ()
@@ -9,17 +11,18 @@ fn if p x e y {
 val else = enum else;
 
 val true = enum true;
+
 val false = enum false;
 
 fn foo x {
   switch x {
-    case A: true
-    case B: false
+    case A: x.foo
+    case B: x.bar
   }
 }
 
 val x = struct A {
-  foo: a
+  foo: true
 };
 
 if (foo x) {
@@ -33,10 +36,36 @@ if (foo x) {
 fn when p x { if p x else {} }
 
 val y = struct B {
-  bar: b
+  bar: true
 };
 
 when (foo y) {
   a;
   b;
 };
+
+fn qux x {
+  switch x {
+    case A: x
+    case B: x
+    default: x
+  }
+}
+
+fn blah x {
+  switch x {
+    case A: x.foo
+    case B: x.bar
+    default: x.bar
+  }
+}
+
+val z = struct C {
+  baz: false
+};
+
+blah (qux y);
+
+blah y;
+
+blah x;

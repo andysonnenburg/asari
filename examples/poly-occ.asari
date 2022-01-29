@@ -1,0 +1,13 @@
+val x = struct Identity { id: \ x { x } };
+
+fn f y {
+  switch x {
+    case Identity: x.id enum A; x.id enum B; x.id y
+  }
+}
+
+val z = f enum C;
+
+switch z {
+  case C:
+}

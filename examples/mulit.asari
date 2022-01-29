@@ -1,0 +1,11 @@
+val f x y z {
+  x.foo + y.bar + z.baz
+}
+
+val x = struct { foo: 1 };
+
+val y = struct { bar: 2 };
+
+val z = struct { baz: 3 };
+
+f x y z

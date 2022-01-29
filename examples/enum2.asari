@@ -1,0 +1,9 @@
+val x = enum A;
+
+fn f x {
+  switch x {
+    case B:
+  }
+}
+
+f x

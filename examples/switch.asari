@@ -1,0 +1,28 @@
+fn f x {
+  switch x {
+    case A: x.foo
+    case B: x.baz
+  }
+}
+
+val g = \ x y z {
+};
+
+val a = struct A {
+  foo: x,
+  baz: y
+};
+
+f a;
+
+val b = struct B {
+  baz: x
+};
+
+f b;
+
+val c = struct B {
+  foo: x
+};
+
+f c;

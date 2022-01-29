@@ -1,0 +1,73 @@
+val nil = enum nil;
+
+fn cons head tail {
+  struct cons {
+    head: head,
+    tail: tail
+  }
+}
+
+fn concat xs ys {
+  switch xs {
+    case nil: ys
+    case cons: cons xs.head (concat xs.tail ys)
+  }
+}
+
+fn singleton x {
+  cons x nil
+}
+
+fn flatten x {
+  switch x {
+    case nil: nil
+    case cons: concat (flatten x.head) (flatten x.tail)
+    default: singleton x
+  }
+}
+
+fn assertNil x {
+  switch x {
+    case nil:
+  }
+}
+
+fn assertCons x {
+  switch x {
+    case cons: x.head; x.tail;
+  }
+}
+
+fn assertList x {
+  switch x {
+    case nil:
+    case cons: x.head; assertList x.tail
+  }
+}
+
+val x = cons enum A enum B;
+
+assertList (flatten x);
+
+val x = nil;
+
+assertList (flatten x);
+
+val a = struct A {
+  foo: enum B
+};
+
+fn id x { x }
+
+val y = struct cons {
+  head: enum A,
+  tail: a
+};
+
+assertList (flatten y);
+
+val z = struct A {
+  foo: enum B
+};
+
+assertList (flatten z)

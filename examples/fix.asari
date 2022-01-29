@@ -1,0 +1,16 @@
+fn g x {
+  f enum A; f enum B
+}
+
+fn f x {
+  g x;
+  switch x {
+    case C: x
+  }
+}
+
+val x = f enum C;
+
+switch x {
+  case C:
+}

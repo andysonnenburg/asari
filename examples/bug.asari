@@ -1,0 +1,9 @@
+val a = struct cons {
+  foo: enum B
+};
+
+fn id x { x }
+
+switch a {
+  case cons: a.head a.head
+};

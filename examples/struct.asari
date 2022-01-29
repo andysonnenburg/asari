@@ -1,0 +1,31 @@
+val true = enum true;
+
+val false = enum false;
+
+fn choose p x y {
+  switch p {
+    case false: x
+    case true: y
+  }
+}
+
+val x = struct {
+  f: enum A,
+  g: enum B
+};
+
+val y = struct {
+  f: enum C
+};
+
+fn f x {
+  x.g
+}
+
+f (choose false x y);
+
+val z = struct {
+  h: enum D
+};
+
+f z
