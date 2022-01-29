@@ -215,14 +215,14 @@ inferVarCase :: ( Ord a
                 , MonadRef r m
                 , MonadSupply Label m
                 ) => a -> Name -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
-inferVarCase v i e = do
-  (env_e, t_e) <- local (Map.delete v) $ infer e
-  case Map.lookup v env_e of
+inferVarCase x i e = do
+  (env_e, t_e) <- local (Map.delete x) $ infer e
+  case Map.lookup x env_e of
     Just t_neg -> do
       (t_i_neg, t_i_pos) <- freshVar
       t_pos <- freshCase i t_i_pos
       unify' t_pos t_neg
-      pure (Map.delete v env_e, t_e, t_i_neg)
+      pure (Map.delete x env_e, t_e, t_i_neg)
     Nothing -> do
       t_i_neg <- fresh State.empty
       pure (env_e, t_e, t_i_neg)
@@ -234,14 +234,14 @@ inferVarDefault :: ( Ord a
                    , MonadRef r m
                    , MonadSupply Label m
                    ) => a -> [Name] -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
-inferVarDefault v i e = do
-  (env_e, t_e) <- local (Map.delete v) $ infer e
-  case Map.lookup v env_e of
+inferVarDefault x i e = do
+  (env_e, t_e) <- local (Map.delete x) $ infer e
+  case Map.lookup x env_e of
     Just t_neg -> do
       (t_i_neg, t_i_pos) <- freshVar
       t_pos <- freshDefault i t_i_pos
       unify' t_pos t_neg
-      pure (Map.delete v env_e, t_e, t_i_neg)
+      pure (Map.delete x env_e, t_e, t_i_neg)
     Nothing -> do
       t_i_neg <- fresh State.empty
       pure (env_e, t_e, t_i_neg)
