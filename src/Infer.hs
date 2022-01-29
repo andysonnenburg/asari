@@ -21,13 +21,14 @@ module Infer
   , infer'
   ) where
 
-import Control.Arrow (first)
+import Control.Arrow ((***), first)
 import Control.Monad.Except
 import Control.Monad.Reader
 import Control.Monad.ST
 import Data.Bifunctor.Join
 import Data.Coerce
 import Data.Foldable
+import Data.Functor ((<&>))
 import Data.Functor qualified as Functor
 import Data.Functor.Product
 import Data.Map.Merge.Lazy qualified as Map
@@ -85,10 +86,9 @@ infer = \ case
     s <- newRef $ Poly t_e1
     local (Map.insert x s) $ infer e2
   Exp.Fn x xs e1 e2 -> mdo
-    z0 <- ask
-    (env, t_xs) <- rotateL foldlM (z0, []) (y:|ys) $ \ (m, t_xs) (x, xs, e1) -> do
-      t_x <- newRef $ Abs env xs e1
-      pure (Map.insert x t_x m, (x, t_x):t_xs)
+    z0 <- asks (, [])
+    (env, t_xs) <- rotateL foldlM z0 (y:|ys) $ \ z (x, xs, e1) -> do
+      newRef (Abs env xs e1) <&> \ t_x -> Map.insert x t_x *** ((x, t_x):) $ z
     for_ t_xs $ uncurry inferVar_
     local (const env) $ infer e2'
     where
