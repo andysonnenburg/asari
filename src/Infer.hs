@@ -71,11 +71,8 @@ infer :: ( Ord a
          , MonadSupply Label m
          ) => Exp a -> m (MPoly a r)
 infer = \ case
-  Var x -> asks (Map.lookup x) >>= \ case
-    Just s -> inferVar x s
-    Nothing -> inferMonoVar x
-  Lam xs e ->
-    inferAbs xs e
+  Var x -> inferVar x
+  Lam xs e -> inferAbs xs e
   App e1 e2 -> do
     (env_e1, t_e1) <- infer e1
     (env_e2, t_e2) <- infer e2
@@ -141,10 +138,8 @@ infer = \ case
     t_e_neg <- freshUnion t_i . Just =<< fresh State.empty
     unify' t_e_pos t_e_neg
     (,) <$> unionEnv' (Pair (Join (env_e, env_xs)) env_y) <*> union' (t_xs :| t_y)
-  Enum i ->
-    (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
-  Exp.Void ->
-    (mempty,) <$> freshVoid
+  Enum i -> (mempty,) <$> (freshCase i =<< fresh (State.singleton Head.Void))
+  Exp.Void -> (mempty,) <$> freshVoid
 
 inferVar :: ( Ord a
             , MonadError Error m
@@ -152,18 +147,31 @@ inferVar :: ( Ord a
             , MonadReader (Map a (r (VarState a r))) m
             , MonadRef r m
             , MonadSupply Label m
-            ) => a -> r (VarState a r) -> m (MPoly a r)
-inferVar x s = readRef s >>= \ case
-  Abs env xs e -> do
-    writeRef s Mono
-    t@(env, t_pos) <- local (const env) $ inferAbs xs e
-    t <- rotateR maybe (Map.lookup x env) (freeze t) $ \ t_neg -> do
-      unify' t_pos t_neg
-      freeze (Map.delete x env, t_pos)
-    writeRef s $ Poly t
-    thaw t
-  Mono -> inferMonoVar x
-  Poly t -> thaw t
+            ) => a -> m (MPoly a r)
+inferVar x = lookupVar x >>= \ case
+  Nothing -> inferMonoVar x
+  Just t -> thaw t
+
+lookupVar :: ( Ord a
+             , MonadError Error m
+             , MonadFix m
+             , MonadReader (Map a (r (VarState a r))) m
+             , MonadRef r m
+             , MonadSupply Label m
+             ) => a -> m (Maybe (Poly a))
+lookupVar x = asks (Map.lookup x) >>= \ case
+  Nothing -> pure Nothing
+  Just s -> readRef s >>= \ case
+    Abs env xs e -> do
+      writeRef s Mono
+      t@(env, t_pos) <- local (const env) $ inferAbs xs e
+      t <- rotateR maybe (Map.lookup x env) (freeze t) $ \ t_neg -> do
+        unify' t_pos t_neg
+        freeze (Map.delete x env, t_pos)
+      writeRef s $ Poly t
+      pure $ Just t
+    Mono -> pure Nothing
+    Poly t -> pure $ Just t
 
 inferMonoVar :: ( MonadFix m
                 , MonadRef r m
@@ -216,9 +224,9 @@ inferVarCase :: ( Ord a
                 , MonadRef r m
                 , MonadSupply Label m
                 ) => a -> Name -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
-inferVarCase x i e = asks (Map.lookup x) >>= \ case
-  Just s_x -> do
-    (env_x, t_x_pos) <- inferVar x s_x
+inferVarCase x i e = lookupVar x >>= \ case
+  Just t_x -> do
+    (env_x, t_x_pos) <- thaw t_x
     (t_i_neg, t_i_pos) <- freshVar
     t_neg <- freshUnion [(i, Just (Set.singleton t_i_neg))] . Just =<< fresh State.empty
     unify' t_x_pos t_neg
@@ -245,9 +253,9 @@ inferVarDefault :: ( Ord a
                    , MonadRef r m
                    , MonadSupply Label m
                    ) => a -> [Name] -> Exp a -> m (Map a (MMono r), MMono r, MMono r)
-inferVarDefault x i e = asks (Map.lookup x) >>= \ case
-  Just s_x -> do
-    (env_x, t_x_pos) <- inferVar x s_x
+inferVarDefault x i e = lookupVar x >>= \ case
+  Just t_x -> do
+    (env_x, t_x_pos) <- thaw t_x
     t_i <- for i $ \ i -> do
       t_i <- fresh State.empty
       pure (i, Just (Set.singleton t_i))
