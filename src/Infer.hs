@@ -83,7 +83,7 @@ infer = \ case
     local (Map.insert x s) $ infer e2
   Exp.Fn x xs e1 e2 -> mdo
     z0 <- asks (, [])
-    (env, t_xs) <- rotateL foldlM z0 (y:|ys) $ \ z (x, xs, e1) -> do
+    (env, t_xs) <- rotateL foldlM z0 (y :| ys) $ \ z (x, xs, e1) -> do
       newRef (Abs env xs e1) <&> \ t_x -> Map.insert x t_x *** ((x, t_x):) $ z
     for_ t_xs $ uncurry inferVar_
     local (const env) $ infer e2'
